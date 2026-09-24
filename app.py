@@ -138,7 +138,6 @@ with tab_import:
                 all_numeric = False
                 break
 
-            # Если колонка чисто числовая, ставим флаг is_numeric (но сохранять в словарь сами значения не обязательно, либо держим пустыми)
             if all_numeric:
               db["global_glossary"][col]["is_numeric"] = True
             else:
@@ -188,7 +187,6 @@ with tab_glossary:
   if not glossary:
     st.info("Глоссарий пуст. Загрузите файл на первой вкладке.")
   else:
-    # Формируем красивые подписи для селектора (с количеством или плашкой "только числовые")
     attr_options = []
     attr_map = {}
     for attr, info in glossary.items():
@@ -211,7 +209,6 @@ with tab_glossary:
     selected_attr = attr_map[selected_label]
     attr_info = glossary[selected_attr]
 
-    # Возможность удалить характеристику в один клик через корзину прямо рядом
     with col_del_btn:
       st.write("")
       st.write("")
@@ -221,7 +218,6 @@ with tab_glossary:
         st.success(f"Заголовок '{selected_attr}' удален!")
         st.rerun()
 
-    # Блок настроек выбранной характеристики
     st.markdown("---")
     c1, c2 = st.columns([3, 2])
 
@@ -254,17 +250,14 @@ with tab_glossary:
       if new_is_numeric != current_is_numeric:
         attr_info["is_numeric"] = new_is_numeric
         if new_is_numeric:
-          attr_info["values"] = []  д
+          attr_info["values"] = []
         save_db(db)
         st.success("Тип данных обновлен!")
         st.rerun()
 
-    # Список значений (если характеристика не чисто числовая)
     if not attr_info.get("is_numeric", False):
       values_list = attr_info.get("values", [])
-      st.markdown(
-          f"**Уникальных текстовых значений:** `{len(values_list)}`"
-      )
+      st.markdown(f"**Уникальных текстовых значений:** `{len(values_list)}`")
 
       with st.expander("👁️ Посмотреть и точечно удалить значения"):
         if not values_list:
