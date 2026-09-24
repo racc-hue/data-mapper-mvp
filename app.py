@@ -1,24 +1,78 @@
+import json
+import os
 import io
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Маппер данных", page_icon="📊", layout="wide"
+    page_title="Умный MDM-маппер прайсов", page_icon="🧠", layout="wide"
 )
 
-st.title("Маппер данных поставщиков")
-st.write(
-    "Инструмент для нормализации характеристик и подготовки данных для сайта."
-)
+# Файл для имитации базы данных / памяти приложения
+DB_FILE = "knowledge_base.json"
 
-# 1. Загрузка файла
+
+# Загрузка базы знаний (памяти)
+def load_db():
+  if os.path.exists(DB_FILE):
+    try:
+      with open(DB_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+    except:
+      pass
+  # Дефолтная структура, если файла нет
+  return {
+      "global_attributes": {
+          "Наименование товара": {"required": True, "synonyms": []},
+          "Цена": {"required": True, "synonyms": []},
+          "Артикул / SKU": {"required": False, "synonyms": []},
+          "Габариты (ВхШхГ)": {"required": True, "synonyms": []},
+      },
+      "templates": {},
+  }
+
+
+# Сохранение базы знаний
+def save_db(data):
+  with open(DB_FILE, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=4)
+
+
+db = load_db()
+
+st.title("🧠 Интеллектуальная система маппинга и памяти прайсов")
+st.sidebar.header("⚙️ Управление памятью и словарем")
+
+# --- БОКОВАЯ ПАНЕЛЬ: Управление глобальными характеристиками ---
+st.sidebar.subheader("Глобальные параметры сайта")
+new_attr_name = st.sidebar.text_input("Добавить новый глобальный заголовок")
+new_attr_required = st.sidebar.checkbox("Обязательное поле для сайта")
+
+if st.sidebar.button("➕ Добавить в глобальный справочник"):
+  if new_attr_name and new_attr_name not in db["global_attributes"]:
+    db["global_attributes"]
+    db["global_attributes"][new_attr_name] = {
+        "required": new_attr_required,
+        "synonyms": [],
+    }
+    save_db(db)
+    st.sidebar.success(f"Параметр '{new_attr_name}' добавлен в память!")
+    st.rerun()
+
+st.sidebar.divider()
+st.sidebar.write("📌 **Текущие глобальные параметры в памяти:**")
+for attr, info in db["global_attributes"].items():
+  req_mark = "⭐ (обязательно)" if info["required"] else ""
+  st.sidebar.text(f"- {attr} {req_mark}")
+
+
+# --- ОСНОВНОЙ ЭКРАН ---
 uploaded_file = st.file_uploader(
-    "Загрузите прайс-лист поставщика или выгрузку с сайта (Excel или CSV)",
+    "Загрузите прайс-лист поставщика или выгрузку (Excel / CSV)",
     type=["xlsx", "xls", "csv"],
 )
 
 if uploaded_file is not None:
-  # Читаем файл с защитой для "кривых" выгрузок со старых сайтов
   try:
     if uploaded_file.name.endswith(".csv"):
       raw_bytes = uploaded_file.read()
@@ -29,123 +83,138 @@ if uploaded_file is not None:
           break
         except UnicodeDecodeError:
           continue
-
-      if text_data is None:
-        raise Exception("Не удалось определить кодировку файла.")
-
-      try:
-        df = pd.read_csv(
-            io.StringIO(text_data),
-            sep=None,
-            engine="python",
-            encoding_errors="replace",
-        )
-      except Exception:
-        df = pd.read_csv(
-            io.StringIO(text_data),
-            sep=";",
-            engine="python",
-            encoding_errors="replace",
-        )
+      df = pd.read_csv(
+          io.StringIO(text_data),
+          sep=None,
+          engine="python",
+          encoding_errors="replace",
+      )
     else:
       df = pd.read_excel(uploaded_file)
   except Exception as e:
-    st.error(
-        f"Ошибка при чтении файла выгрузки: {e}. Попробуйте открыть этот CSV в"
-        " Excel и сохранить как .xlsx"
-    )
+    st.error(f"Ошибка чтения файла: {e}")
     st.stop()
 
-  st.subheader("📋 Предпросмотр исходного файла")
-  st.dataframe(df.head(5), use_container_width=True)
-
+  st.subheader("📋 Предпросмотр загруженного файла")
+  st.dataframe(df.head(3), use_container_width=True)
   columns = list(df.columns)
 
   st.divider()
-  st.subheader("🔗 Маппинг колонок (Сопоставление)")
-  st.write(
-      "Свяжите колонки поставщика с глобальными системными характеристиками."
+  st.subheader("🔗 Интерактивный маппинг и обучение")
+
+  # Выбор сохраненного профиля (если есть)
+  template_names = list(db["templates"].keys())
+  selected_template = st.selectbox(
+      "📦 Применить сохраненный шаблон маппинга (если есть)",
+      ["-- Выберите шаблон или настройте вручную --"] + template_names,
   )
 
-  col1, col2, col3 = st.columns(3)
+  saved_mapping = {}
+  if selected_template != "-- Выберите шаблон или настройте вручную --":
+    saved_mapping = db["templates"][selected_template]
 
-  with col1:
-    st.markdown("**Системное поле**")
-    st.text("Наименование товара *")
-    st.text("Цена *")
-    st.text("Артикул / SKU")
-    st.text("Габариты (ВхШхГ) *")
+  # Динамическое построение строк маппинга для каждого глобального атрибута
+  mapping_results = {}
 
-  with col2:
-    st.markdown("**Колонка у поставщика**")
-    map_name = st.selectbox(
-        "Название", columns, index=0 if len(columns) > 0 else 0, key="m_name"
-    )
-    map_price = st.selectbox(
-        "Цена", columns, index=1 if len(columns) > 1 else 0, key="m_price"
-    )
-    map_sku = st.selectbox(
-        "Артикул", columns, index=2 if len(columns) > 2 else 0, key="m_sku"
-    )
-    map_dims = st.selectbox(
-        "Габариты", columns, index=3 if len(columns) > 3 else 0, key="m_dims"
-    )
+  st.markdown(
+      "Сопоставьте глобальные параметры сайта с колонками в загруженном файле:"
+  )
 
-  with col3:
-    st.markdown("**Пример данных из файла**")
-    st.caption(
-        str(df[map_name].head(2).tolist()) if map_name else "Нет данных"
-    )
-    st.caption(
-        str(df[map_price].head(2).tolist()) if map_price else "Нет данных"
-    )
-    st.caption(str(df[map_sku].head(2).tolist()) if map_sku else "Нет данных")
-    st.caption(str(df[map_dims].head(2).tolist()) if map_dims else "Нет данных")
+  for attr_name, attr_info in db["global_attributes"].items():
+    col1, col2, col3 = st.columns([2, 2, 2])
+
+    with col1:
+      req_label = (
+          f"**{attr_name}** <span style='color:red'>*</span>"
+          if attr_info["required"]
+          else f"**{attr_name}**"
+      )
+      st.markdown(req_label, unsafe_allow_html=True)
+
+    with col2:
+      # Пытаемся подставить дефолт из сохраненного шаблона
+      default_idx = 0
+      saved_col = saved_mapping.get(attr_name)
+      if saved_col in columns:
+        default_idx = columns.index(saved_col)
+
+      chosen_col = st.selectbox(
+          f"Колонка для {attr_name}",
+          columns,
+          index=default_idx,
+          key=f"map_{attr_name}",
+      )
+      mapping_results[attr_name] = chosen_col
+
+    with col3:
+      if chosen_col and chosen_col in df.columns:
+        sample_val = str(df[chosen_col].dropna().head(1).values)
+        st.caption(f"Пример: {sample_val}")
+      else:
+        st.caption("Нет данных")
 
   st.divider()
 
+  # --- БЛОК СОХРАНЕНИЯ В ПАМЯТЬ ---
+  st.subheader("💾 Сохранение настроек в память приложения")
+  save_template_name = st.text_input(
+      "Имя шаблона для этого поставщика (например: 'Прайс_Поставщика_А')",
+      value="",
+  )
+
+  col_s1, col_s2 = st.columns(2)
+  with col_s1:
+    save_checked = st.checkbox(
+        "Сохранить этот маппинг в постоянную память (шаблоны)", value=True
+    )
+
   if st.button(
-      "🚀 Проверить обязательные поля и сформировать файл для сайта",
+      "🚀 Запустить валидацию и сформировать файл",
       type="primary",
   ):
+    # Если пользователь хочет сохранить шаблон
+    if save_checked and save_template_name:
+      db["templates"][save_template_name] = mapping_results
+      save_db(db)
+      st.success(f"Шаблон '{save_template_name}' успешно сохранен в память!")
+
+    # Валидация обязательных полей
     errors = []
-    if df[map_name].isnull().any():
-      errors.append("В колонке 'Наименование товара' есть пустые ячейки!")
-    if df[map_price].isnull().any():
-      errors.append("В колонке 'Цена' есть пустые ячейки!")
-    if df[map_dims].isnull().any():
-      errors.append(
-          "Внимание! Обязательное для сайта поле 'Габариты' имеет пустые"
-          " значения в некоторых строках."
-      )
+    for attr_name, attr_info in db["global_attributes"].items():
+      if attr_info["required"]:
+        mapped_col = mapping_results.get(attr_name)
+        if mapped_col and df[mapped_col].isnull().any():
+          errors.append(
+              f"В обязательной колонке '{attr_name}' (колонка файла:"
+              f" '{mapped_col}') обнаружены пустые ячейки!"
+          )
 
     if errors:
       st.warning(
-          "⚠️ Обнаружены проблемы, требующие внимания (карточки создадутся с"
-          " предупреждениями для админки):"
+          "⚠️ Обнаружены незаполненные обязательные поля перед выгрузкой:"
       )
       for err in errors:
         st.write(f"- {err}")
 
+    # Сборка итогового файла
     result_df = pd.DataFrame()
-    result_df["product_title"] = df[map_name]
-    result_df["product_price"] = df[map_price]
-    result_df["product_sku"] = df[map_sku]
-    result_df["attr_dimensions"] = df[map_dims]
+    for attr_name, mapped_col in mapping_results.items():
+      if mapped_col in df.columns:
+        result_df[attr_name] = df[mapped_col]
 
-    st.success("✅ Готово! Файл успешно отформатирован под требования сайта.")
+    st.success("✅ Готово! Файл сформирован согласно вашим настройкам.")
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
       result_df.to_excel(writer, index=False, sheet_name="Import")
 
     st.download_button(
-        label="📥 Скачать файл для загрузки на сайт",
+        label="📥 Скачать готовый файл для сайта",
         data=buffer.getvalue(),
-        file_name="ready_for_site.xlsx",
+        file_name="normalized_export.xlsx",
         mime=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
 else:
-  st.info("👆 Загрузите файл прайс-листа или выгрузки выше, чтобы начать работу.")
+  st.info("👆 Загрузите файл выше, чтобы начать настройку маппинга.")
