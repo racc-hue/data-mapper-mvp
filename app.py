@@ -90,7 +90,6 @@ with tab_import:
 
     st.success(f"Файл загружен. Строк: {len(df)}, Колонок: {len(df.columns)}")
 
-    # Поиск хлебных крошек
     cat_col = None
     for c in df.columns:
       if "breadcrumb" in c.lower() or "крошк" in c.lower() or "раздел" in c.lower():
@@ -126,7 +125,6 @@ with tab_import:
             if col not in db["global_glossary"]:
               db["global_glossary"][col] = {"values": [], "is_numeric": False}
 
-            # Проверяем, являются ли все значения числовыми
             all_numeric = True
             for v in vals:
               cleaned_v = (
@@ -178,133 +176,168 @@ with tab_structure:
         st.markdown(f"- 📁 **{cat_name}**")
 
 # ==========================================
-# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ
+# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ (ДВУХКОЛОНОЧНЫЙ ИНТЕРФЕЙС)
 # ==========================================
 with tab_glossary:
-  st.subheader("📚 Компактный редактор глоссария и значений")
+  st.subheader("📚 Управление глоссарием и массовое удаление")
   glossary = db["global_glossary"]
 
   if not glossary:
     st.info("Глоссарий пуст. Загрузите файл на первой вкладке.")
   else:
-    # Формируем списки для селектора
-    attr_options = []
-    attr_map = {}
-    for attr, info in glossary.items():
-      is_num = info.get("is_numeric", False)
-      if is_num:
-        label = f"{attr} [только числовые]"
-      else:
-        count = len(info.get("values", []))
-        label = f"{attr} ({count} знач.)"
-      attr_options.append(label)
-      attr_map[label] = attr
+    col_left, col_right = st.columns([4, 6], gap="large")
 
-    # Управляем выбором через session_state, чтобы избежать сброса на первый элемент
-    if (
-        "glossary_sel" not in st.session_state
-        or st.session_state.glossary_sel not in attr_options
-    ):
-      if attr_options:
-        st.session_state.glossary_sel = attr_options[0]
+    # --- ЛЕВАЯ КОЛОНКА: Список заголовков с чекбоксами и кнопкой выбора ---
+    with col_left:
+      st.markdown("### 📋 Заголовки характеристик")
 
-    col_sel, col_del_btn = st.columns([5, 1])
-
-    with col_sel:
-      selected_label = st.selectbox(
-          "Выберите характеристику", attr_options, key="glossary_sel"
-      )
-
-    selected_attr = attr_map[selected_label]
-    attr_info = glossary[selected_attr]
-
-    with col_del_btn:
-      st.write("")
-      st.write("")
-      if st.button("🗑️ Удалить", key="quick_del_btn", type="secondary"):
-        # Удаляем характеристику из глоссария
-        glossary.pop(selected_attr, None)
-        save_db(db)
-
-        # Сбрасываем выбранный элемент, чтобы селектор корректно перестроился без ошибок
-        if "glossary_sel" in st.session_state:
-          del st.session_state.glossary_sel
-
-        st.rerun()
-
-    st.markdown("---")
-    c1, c2 = st.columns([3, 2])
-
-    with c1:
-      new_attr_title = st.text_input(
-          "Переименовать заголовок",
-          value=selected_attr,
-          key=f"ren_{selected_attr}",
-      )
-      if new_attr_title != selected_attr and new_attr_title:
-        if st.button("💾 Сохранить новое имя"):
-          glossary[new_attr_title] = glossary.pop(selected_attr)
+      # Кнопка массового удаления выбранных заголовков
+      if st.button(
+          "🗑️ Удалить выбранные заголовки",
+          type="primary",
+          key="del_selected_attrs",
+      ):
+        to_delete = [
+            attr
+            for attr in glossary.keys()
+            if st.session_state.get(f"chk_attr_{attr}", False)
+        ]
+        if to_delete:
+          for attr in to_delete:
+            glossary.pop(attr, None)
           save_db(db)
-          st.session_state.glossary_sel = (
-              f"{new_attr_title} [только числовые]"
-              if glossary[new_attr_title].get("is_numeric", False)
-              else (
-                  f"{new_attr_title} ("
-                  f"{len(glossary[new_attr_title].get('values', []))} знач.)"
-              )
-          )
-          st.success("Переименовано!")
+          # Сбрасываем активный выбор если он был удален
+          if st.session_state.get("active_attr") in to_delete:
+            st.session_state.active_attr = None
+          st.success(f"Успешно удалено заголовков: {len(to_delete)}")
           st.rerun()
-
-    with c2:
-      st.write("**Тип данных характеристики:**")
-      current_is_numeric = attr_info.get("is_numeric", False)
-      new_is_numeric = st.checkbox(
-          "🔢 Считать эту характеристику числовой",
-          value=current_is_numeric,
-          key=f"num_chk_{selected_attr}",
-          help=(
-              "Если включено, значения не будут забиваться в список, а заголовок"
-              " получит статус '[только числовые]'."
-          ),
-      )
-      if new_is_numeric != current_is_numeric:
-        attr_info["is_numeric"] = new_is_numeric
-        if new_is_numeric:
-          attr_info["values"] = []
-        save_db(db)
-        st.rerun()
-
-    # Быстрое удаление точечных значений через оптимизированный вид
-    if not attr_info.get("is_numeric", False):
-      values_list = attr_info.get("values", [])
-      st.markdown(f"**Уникальных текстовых значений:** `{len(values_list)}`")
-
-      with st.expander("👁️ Посмотреть и точечно удалить значения"):
-        if not values_list:
-          st.info("Список значений пуст.")
         else:
-          # Выводим компактно списком с индивидуальными кнопками удаления
-          vals_to_remove = []
-          for idx_v, val in enumerate(values_list):
-            c_v1, c_v2 = st.columns([10, 1])
-            with c_v1:
-              st.text(val)
-            with c_v2:
-              if st.button("❌", key=f"del_v_{selected_attr}_{idx_v}"):
-                vals_to_remove.append(val)
+          st.warning("Не выбрано ни одного заголовка для удаления.")
 
-          if vals_to_remove:
-            for v in vals_to_remove:
-              if v in attr_info["values"]:
-                attr_info["values"].remove(v)
+      st.markdown("---")
+
+      # Установка активного заголовка по умолчанию
+      all_attrs = list(glossary.keys())
+      if (
+          "active_attr" not in st.session_state
+          or st.session_state.active_attr not in glossary
+      ):
+        st.session_state.active_attr = all_attrs[0] if all_attrs else None
+
+      # Вывод списка заголовков
+      for attr in all_attrs:
+        info = glossary[attr]
+        is_num = info.get("is_numeric", False)
+        badge = (
+            "[только числовые]"
+            if is_num
+            else f"({len(info.get('values', []))} знач.)"
+        )
+
+        c_chk, c_btn = st.columns([1, 10])
+        with c_chk:
+          st.checkbox("", key=f"chk_attr_{attr}", label_visibility="collapsed")
+        with c_btn:
+          # Делаем активную кнопку подсветкой
+          btn_type = (
+              "primary"
+              if st.session_state.active_attr == attr
+              else "secondary"
+          )
+          if st.button(f"{attr} {badge}", key=f"btn_attr_{attr}", use_container_width=True, type=btn_type):
+            st.session_state.active_attr = attr
+            st.rerun()
+
+    # --- ПРАВАЯ КОЛОНКА: Детали выбранного заголовка и значений ---
+    with col_right:
+      active_attr = st.session_state.get("active_attr")
+      if not active_attr or active_attr not in glossary:
+        st.info("Выберите заголовок слева, чтобы посмотреть его характеристики.")
+      else:
+        st.markdown(f"### ⚙️ Редактирование: `{active_attr}`")
+        attr_info = glossary[active_attr]
+
+        # Переименование и тип данных
+        rc1, rc2 = st.columns(2)
+        with rc1:
+          new_name = st.text_input(
+              "Переименовать заголовок",
+              value=active_attr,
+              key=f"rename_{active_attr}",
+          )
+          if new_name != active_attr and new_name:
+            if st.button("💾 Сохранить имя"):
+              glossary[new_name] = glossary.pop(active_attr)
+              save_db(db)
+              st.session_state.active_attr = new_name
+              st.success("Переименовано!")
+              st.rerun()
+
+        with rc2:
+          st.write("**Тип данных:**")
+          is_num_current = attr_info.get("is_numeric", False)
+          is_num_new = st.checkbox(
+              "🔢 Считать числовой",
+              value=is_num_current,
+              key=f"num_flag_{active_attr}",
+          )
+          if is_num_new != is_num_current:
+            attr_info["is_numeric"] = is_num_new
+            if is_num_new:
+              attr_info["values"] = []
             save_db(db)
             st.rerun()
-    else:
-      st.info(
-          "ℹ️ Эта характеристика помечена как числовая. Текстовые значения"
-          " не хранятся."
-      )
+
+        st.markdown("---")
+
+        # Список значений и массовое удаление
+        if not attr_info.get("is_numeric", False):
+          vals = attr_info.get("values", [])
+          st.markdown(f"**Уникальных значений:** `{len(vals)}`")
+
+          if vals:
+            # Кнопка массового удаления выбранных значений
+            if st.button(
+                "🗑️ Удалить выбранные значения",
+                key=f"del_vals_{active_attr}",
+            ):
+              vals_to_del = [
+                  v
+                  for v in vals
+                  if st.session_state.get(
+                      f"chk_val_{active_attr}_{hash(v)}", False
+                  )
+              ]
+              if vals_to_del:
+                for v in vals_to_del:
+                  if v in attr_info["values"]:
+                    attr_info["values"].remove(v)
+                save_db(db)
+                st.success(f"Успешно удалено значений: {len(vals_to_del)}")
+                st.rerun()
+              else:
+                st.warning("Не выбрано ни одного значения.")
+
+            st.markdown("---")
+
+            # Список значений с чекбоксами (скроллируемая область)
+            for v in vals:
+              vc1, vc2 = st.columns([1, 15])
+              with vc1:
+                st.checkbox(
+                    "",
+                    key=f"chk_val_{active_attr}_{hash(v)}",
+                    label_visibility="collapsed",
+                )
+              with vc2:
+                st.text(v)
+          else:
+            st.info("Список значений пуст.")
+        else:
+          st.info(
+              "ℹ️ Эта характеристика помечена как числовая. Текстовые значения"
+              " не хранятся."
+          )
 
 # ==========================================
 # ВКЛАДКА 4: ОБЯЗАТЕЛЬНЫЕ ПОЛЯ
