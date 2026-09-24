@@ -132,7 +132,7 @@ with tab_import:
 
           if non_empty_vals:
             if col not in db["global_glossary"]:
-              db["global_glossary][col] = []
+              db["global_glossary"][col] = []
 
             # Добавляем уникальные значения без дублей
             for val in non_empty_vals:
