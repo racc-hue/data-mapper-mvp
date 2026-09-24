@@ -5,13 +5,13 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Гибкий MDM-маппер прайсов", page_icon="🧠", layout="wide"
+    page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "knowledge_base.json"
+DB_FILE = "mdm_knowledge_base.json"
 
 
-# Загрузка базы знаний
+# Инициализация или загрузка постоянной базы знаний
 def load_db():
   if os.path.exists(DB_FILE):
     try:
@@ -20,13 +20,9 @@ def load_db():
     except:
       pass
   return {
-      "global_attributes": {
-          "Наименование товара": {"required": True},
-          "Артикул / SKU": {"required": False},
-          "Цена": {"required": False},
-          "Габариты (ВхШхГ)": {"required": False},
-      },
-      "templates": {},
+      "categories": {},  # { "Название подкатегории": { "required_attributes": [...] } }
+      "global_attributes": [],  # Общий список всех встреченных характеристик
+      "imported_files_count": 0,
   }
 
 
@@ -37,195 +33,204 @@ def save_db(data):
 
 db = load_db()
 
-st.title("🧠 Гибкий маппер и нормализатор характеристик")
-st.write(
-    "Настраивайте только те поля, которые вам нужны, и управляйте"
-    " характеристиками."
+st.title("🧠 MDM-Система каталога, категорий и глоссария")
+
+# Навигация по разделам
+tab_import, tab_glossary = st.tabs(
+    ["📥 Загрузка и обучение по файлу", "📚 Управление глоссарием и категориями"]
 )
 
-# 1. Загрузка файла
-uploaded_file = st.file_uploader(
-    "Загрузите прайс-лист поставщика или выгрузку с сайта (Excel или CSV)",
-    type=["xlsx", "xls", "csv"],
-)
-
-if uploaded_file is not None:
-  try:
-    if uploaded_file.name.endswith(".csv"):
-      raw_bytes = uploaded_file.read()
-      text_data = None
-      for enc in ["utf-8-sig", "cp1251", "utf-8", "latin1"]:
-        try:
-          text_data = raw_bytes.decode(enc)
-          break
-        except UnicodeDecodeError:
-          continue
-      df = pd.read_csv(
-          io.StringIO(text_data),
-          sep=None,
-          engine="python",
-          encoding_errors="replace",
-      )
-    else:
-      df = pd.read_excel(uploaded_file)
-  except Exception as e:
-    st.error(f"Ошибка чтения файла: {e}")
-    st.stop()
-
-  st.subheader("📋 Предпросмотр исходного файла")
-  st.dataframe(df.head(3), use_container_width=True)
-  columns = list(df.columns)
-
-  st.divider()
-  st.subheader("⚙️ Шаг 1: Выберите, какие параметры участвуют в этом маппинге")
+# ==========================================
+# ВКЛАДКА 1: ЗАГРУЗКА И ОБУЧЕНИЕ
+# ==========================================
+with tab_import:
+  st.subheader("Обучение системы на файле выгрузки сайта")
   st.write(
-      "Отметьте галочками только те характеристики, которые вам действительно"
-      " нужны в этот раз. Лишнее можно отключить."
+      "Загрузите выгрузку. Система автоматически определит базовые колонки,"
+      " вычленит категорию из `breadcrumbs` и пополнит общий глоссарий"
+      " характеристик."
   )
 
-  # Блок управления глобальными атрибутами прямо на экране
-  all_known_attrs = list(db["global_attributes"].keys())
+  uploaded_file = st.file_uploader(
+      "Загрузите Excel или CSV выгрузку", type=["xlsx", "xls", "csv"], key="uploader_main"
+  )
 
-  selected_attributes = []
-  cols_checkboxes = st.columns(min(len(all_known_attrs), 4))
-  for idx, attr in enumerate(all_known_attrs):
-    col_idx = idx % len(cols_checkboxes)
-    with cols_checkboxes[col_idx]:
-      # По умолчанию выбираем обязательные или основные
-      is_default = db["global_attributes"][attr].get("required", False) or attr in [
-          "Наименование товара",
-          "Артикул / SKU",
-      ]
-      if st.checkbox(attr, value=is_default, key=f"chk_{attr}"):
-        selected_attributes.append(attr)
+  if uploaded_file is not None:
+    try:
+      if uploaded_file.name.endswith(".csv"):
+        raw_bytes = uploaded_file.read()
+        text_data = None
+        for enc in ["utf-8-sig", "cp1251", "utf-8", "latin1"]:
+          try:
+            text_data = raw_bytes.decode(enc)
+            break
+          except UnicodeDecodeError:
+            continue
+        df = pd.read_csv(
+            io.StringIO(text_data),
+            sep=None,
+            engine="python",
+            encoding_errors="replace",
+        )
+      else:
+        df = pd.read_excel(uploaded_file)
+    except Exception as e:
+      st.error(f"Ошибка чтения файла: {e}")
+      st.stop()
 
-  # Возможность добавить совершенно новый заголовок на лету
-  with st.expander("➕ Добавить новый глобальный заголовок в систему"):
-    new_attr_input = st.text_input("Название новой характеристики (например, 'Диаметр, мм')")
-    is_new_req = st.checkbox("Сделать это поле обязательным для сайта")
-    if st.button("Создать характеристику"):
-      if new_attr_input and new_attr_input not in db["global_attributes"]:
-        db["global_attributes"][new_attr_input] = {"required": is_new_req}
+    st.success(f"Файл успешно прочитан! Строк: {len(df)}, Колонок: {len(df.columns)}")
+    columns = list(df.columns)
+
+    # 1. Поиск базовых колонок и характеристик
+    # Базовыми считаем те, что часто встречаются (артикул, бренд, описание, url, breadcrumbs и т.д.)
+    base_keywords = [
+        "артикул",
+        "код",
+        "название",
+        "id",
+        "url",
+        "скрыта",
+        "бренд",
+        "описание",
+        "картинок",
+        "документ",
+        "сертификат",
+        "breadcrumbs",
+    ]
+
+    detected_base = []
+    detected_chars = []
+
+    for col in columns:
+      col_lower = str(col).lower()
+      is_base = any(kw in col_lower for kw in base_keywords)
+      if is_base:
+        detected_base.append(col)
+      else:
+        detected_chars.append(col)
+
+    st.write("---")
+    st.info(
+        f"🔍 **Автоматический анализ структуры:**\n"
+        f"- Базовые системные колонки ({len(detected_base)} шт.): `{detected_base}`\n"
+        f"- Колонки характеристик ({len(detected_chars)} шт.): `{detected_chars}`"
+    )
+
+    # 2. Анализ хлебных крошек (breadcrumbs)
+    category_col = None
+    for col in columns:
+      if "breadcrumb" in col.lower() or "крошк" in col.lower() or "раздел" in col.lower():
+        category_col = col
+        break
+
+    extracted_category = "Общий каталог"
+    if category_col and category_col in df.columns:
+      # Берем первое непустое значение для примера
+      sample_bc = df[category_col].dropna().astype(str).values
+      if len(sample_bc) > 0:
+        # Обычно разделитель " > "
+        parts = sample_bc[0].split(">")
+        extracted_category = parts[-1].strip()
+
+    st.write(f"📂 **Определенная подкатегория для этого файла:** `{extracted_category}`")
+
+    # Кнопка обучения и сохранения в БД
+    if st.button("🚀 Обучить систему и добавить характеристики в глоссарий", type="primary"):
+      # Добавляем характеристики в глобальный глоссарий (без дублей)
+      for char in detected_chars:
+        if char not in db["global_attributes"]:
+          db["global_attributes"].append(char)
+
+      # Регистрируем категорию, если её еще нет
+      if extracted_category not in db["categories"]:
+        db["categories"][extracted_category] = {"required_attributes": []}
+
+      db["imported_files_count"] += 1
+      save_db(db)
+      st.success(
+          f"✅ База знаний успешно обновлена! Добавлено новых характеристик в"
+          f" глоссарий: {len(detected_chars)}. Категория '{extracted_category}'"
+          f" зарегистрирована."
+      )
+
+# ==========================================
+# ВКЛАДКА 2: УПРАВЛЕНИЕ ГЛОССАРИЕМ И КАТЕГОРИЯМИ
+# ==========================================
+with tab_glossary:
+  st.subheader("📚 Редактор глобального глоссария и требований подкатегорий")
+  st.write(
+      "Здесь вы можете управлять накопленными характеристиками, удалять лишний"
+      " мусор и настраивать обязательные заголовки для конкретных подкатегорий."
+  )
+
+  col_g1, col_g2 = st.columns(2)
+
+  # Управление глобальным списком характеристик
+  with col_g1:
+    st.markdown("### 🌐 Общий глоссарий характеристик")
+    st.caption("Все характеристики, собранные из загруженных файлов.")
+
+    global_attrs = db["global_attributes"]
+    if not global_attrs:
+      st.info("Глоссарий пока пуст. Загрузите файл на первой вкладке.")
+    else:
+      # Интерфейс удаления ненужных заголовков
+      to_remove = []
+      for attr in global_attrs:
+        c_a, c_b = st.columns([4, 1])
+        with c_a:
+          st.text(attr)
+        with c_b:
+          if st.button("🗑️", key=f"del_{attr}"):
+            to_remove.append(attr)
+
+      if to_remove:
+        for item in to_remove:
+          db["global_attributes"].remove(item)
         save_db(db)
-        st.success(f"Характеристика '{new_attr_input}' добавлена! Перезагрузите выбор.")
+        st.success("Характеристика удалена из глоссария!")
         st.rerun()
 
-  st.divider()
-  st.subheader("🔗 Шаг 2: Сопоставление колонок и просмотр значений")
+      # Ручное добавление характеристики в глоссарий
+      st.write("---")
+      new_manual_attr = st.text_input("Добавить характеристику вручную")
+      if st.button("Добавить в глоссарий"):
+        if new_manual_attr and new_manual_attr not in db["global_attributes"]:
+          db["global_attributes"].append(new_manual_attr)
+          save_db(db)
+          st.success("Добавлено!")
+          st.rerun()
 
-  # Выбор сохраненного шаблона
-  template_names = list(db["templates"].keys())
-  selected_template = st.selectbox(
-      "📦 Загрузить сохраненный шаблон маппинга для этого поставщика",
-      ["-- Выберите шаблон (опционально) --"] + template_names,
-  )
+  # Управление категориями и их обязательными полями
+  with col_g2:
+    st.markdown("### 📂 Подкатегории и обязательные поля")
+    st.caption("Настройте, какие характеристики обязательны для каждой подкатегории.")
 
-  saved_mapping = {}
-  if selected_template != "-- Выберите шаблон (опционально) --":
-    saved_mapping = db["templates"][selected_template]
+    categories = db["categories"]
+    if not categories:
+      st.info("Категорий пока нет. Они появятся после загрузки файлов с `breadcrumbs`.")
+    else:
+      selected_cat = st.selectbox("Выберите подкатегорию для настройки", list(categories.keys()))
 
-  mapping_results = {}
+      if selected_cat:
+        st.write(f"Настройка обязательных полей для: **{selected_cat}**")
+        current_required = categories[selected_cat].get("required_attributes", [])
 
-  # Выстраиваем интерактивную таблицу маппинга для выбранных атрибутов
-  for attr_name in selected_attributes:
-    is_req = db["global_attributes"].get(attr_name, {}).get("required", False)
-    label_text = f"**{attr_name}**" + (" *" if is_req else "")
+        # Чекбоксы для каждой характеристики из глобального глоссария
+        new_required_list = []
+        for attr in db["global_attributes"]:
+          is_checked = attr in current_required
+          if st.checkbox(attr, value=is_checked, key=f"req_{selected_cat}_{attr}"):
+            new_required_list.append(attr)
 
-    with st.container():
-      c1, c2, c3 = st.columns([2, 3, 3])
+        if st.button("💾 Сохранить обязательные поля для категории"):
+          db["categories"][selected_cat]["required_attributes"] = new_required_list
+          save_db(db)
+          st.success(f"Требования для категории '{selected_cat}' сохранены!")
 
-      with c1:
-        st.markdown(label_text, unsafe_allow_html=True)
-
-      with c2:
-        # Ищем дефолт из шаблона или подбираем по похожести
-        default_idx = 0
-        saved_col = saved_mapping.get(attr_name)
-        if saved_col in columns:
-          default_idx = columns.index(saved_col)
-        else:
-          # Пробуем найти частичное совпадение имени
-          for i, col in enumerate(columns):
-            if attr_name.lower() in col.lower():
-              default_idx = i
-              break
-
-        chosen_col = st.selectbox(
-            f"Колонка для {attr_name}",
-            columns,
-            index=default_idx,
-            key=f"map_{attr_name}",
-        )
-        mapping_results[attr_name] = chosen_col
-
-      with c3:
-        # ВЫПАДАЮЩИЙ СПИСОК / ПРОСМОТР ВСЕХ УНИКАЛЬНЫХ ЗНАЧЕНИЙ ХАРАКТЕРИСТИК
-        if chosen_col and chosen_col in df.columns:
-          unique_values = df[chosen_col].dropna().unique().tolist()
-          with st.expander(f"👁️ Посмотреть значения ({len(unique_values)} шт.)"):
-            # Выводим список уникальных значений для этой характеристики
-            st.write(unique_values[:100])  # показываем до 100 уникальных
-            if len(unique_values) > 100:
-              st.caption("Показаны первые 100 уникальных значений...")
-        else:
-          st.caption("Нет данных")
-
-      st.markdown("---")
-
-  # --- БЛОК СОХРАНЕНИЯ ШАБЛОНА ---
-  st.subheader("💾 Шаг 3: Сохранение настроек маппинга")
-  template_name_input = st.text_input(
-      "Имя шаблона для сохранения (например, 'Поставщик_А_Прайс')", value=""
-  )
-  save_template_btn = st.checkbox(
-      "Сохранить этот набор связок в постоянную память приложения", value=True
-  )
-
-  if st.button(
-      "🚀 Проверить и сформировать итоговый файл для сайта", type="primary"
-  ):
-    # Сохранение шаблона в JSON
-    if save_template_btn and template_name_input:
-      db["templates"][template_name_input] = mapping_results
-      save_db(db)
-      st.success(f"Шаблон '{template_name_input}' успешно сохранен в память!")
-
-    # Валидация обязательных полей
-    errors = []
-    for attr_name in selected_attributes:
-      is_req = db["global_attributes"].get(attr_name, {}).get("required", False)
-      if is_req:
-        mapped_col = mapping_results.get(attr_name)
-        if mapped_col and df[mapped_col].isnull().any():
-          errors.append(
-              f"В обязательном поле '{attr_name}' (колонка файла:"
-              f" '{mapped_col}') есть пустые ячейки!"
-          )
-
-    if errors:
-      st.warning("⚠️ Предупреждения по обязательным полям:")
-      for err in errors:
-        st.write(f"- {err}")
-
-    # Сборка итогового файла
-    result_df = pd.DataFrame()
-    for attr_name, mapped_col in mapping_results.items():
-      if mapped_col in df.columns:
-        result_df[attr_name] = df[mapped_col]
-
-    st.success("✅ Готово! Файл успешно отформатирован под ваши параметры.")
-
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-      result_df.to_excel(writer, index=False, sheet_name="Import")
-
-    st.download_button(
-        label="📥 Скачать готовый файл",
-        data=buffer.getvalue(),
-        file_name="mapped_export.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-    )
-else:
-  st.info("👆 Загрузите файл выгрузки или прайса выше, чтобы начать настройку.")
+  st.write("---")
+  if st.button("🗑️ Сбросить всю базу данных (очистить память)"):
+    if os.path.exists(DB_FILE):
+      os.remove(DB_FILE)
+    st.success("База данных очищена!")
+    st.rerun()
