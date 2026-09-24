@@ -1,6 +1,7 @@
 import io
 import json
 import os
+from collections import Counter
 import pandas as pd
 import streamlit as st
 
@@ -8,7 +9,7 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base_v5.json"
+DB_FILE = "mdm_knowledge_base_v6.json"
 
 
 def load_db():
@@ -23,7 +24,7 @@ def load_db():
       "breadcrumbs_tree": [],  # Все цепочки хлебных крошек
       "global_glossary": (
           {}
-      ),  # { "Характеристика": { "values": [...], "is_numeric": False, "total_filled": 0 } }
+      ),  # { "Характеристика": { "values": {val: count}, "is_numeric": False, "total_filled": 0 } }
       "base_columns": [
           "артикул",
           "код",
@@ -121,7 +122,6 @@ with tab_import:
         col_lower = str(col).lower()
         is_base = any(kw in col_lower for kw in base_keywords)
         if not is_base:
-          # Получаем непустые элементы для подсчета заполненности
           col_series = df[col].dropna()
           vals_raw = col_series.astype(str).tolist()
           vals_raw = [v.strip() for v in vals_raw if v.strip()]
@@ -130,7 +130,7 @@ with tab_import:
           if filled_count > 0:
             if col not in db["global_glossary"]:
               db["global_glossary"][col] = {
-                  "values": [],
+                  "values": {},
                   "is_numeric": False,
                   "total_filled": 0,
               }
@@ -140,10 +140,12 @@ with tab_import:
                 db["global_glossary"][col].get("total_filled", 0) + filled_count
             )
 
-            # Проверка на числовой тип
-            unique_vals = list(set(vals_raw))
+            # Проверяем уникальные значения и считаем их частотность
+            val_counts = Counter(vals_raw)
+
+            # Проверка на числовой тип по всем значениям
             all_numeric = True
-            for v in unique_vals:
+            for v in val_counts.keys():
               cleaned_v = (
                   v.replace(",", ".").replace(" ", "").replace("%", "")
               )
@@ -156,9 +158,16 @@ with tab_import:
             if all_numeric:
               db["global_glossary"][col]["is_numeric"] = True
             else:
-              for v in unique_vals:
-                if v not in db["global_glossary"][col]["values"]:
-                  db["global_glossary"][col]["values"].append(v)
+              # Если старые данные хранились как список, конвертируем в словарь для совместимости
+              if isinstance(db["global_glossary"][col]["values"], list):
+                old_list = db["global_glossary"][col]["values"]
+                db["global_glossary"][col]["values"] = {
+                    v: 1 for v in old_list
+                }
+
+              for v, cnt in val_counts.items():
+                current_dict = db["global_glossary"][col]["values"]
+                current_dict[v] = current_dict.get(v, 0) + cnt
 
             added_attrs += 1
 
@@ -246,7 +255,11 @@ with tab_glossary:
         if is_num:
           badge = f"[только числовые: {total_filled} зап.]"
         else:
-          unique_count = len(info.get("values", []))
+          vals_dict = info.get("values", {})
+          if isinstance(vals_dict, list):  # Обратная совместимость со старыми базами
+            vals_dict = {v: 1 for v in vals_dict}
+            info["values"] = vals_dict
+          unique_count = len(vals_dict)
           badge = f"({unique_count} уник. / {total_filled} зап.)"
 
         c_chk, c_btn = st.columns([1, 10])
@@ -302,7 +315,7 @@ with tab_glossary:
           if is_num_new != is_num_current:
             attr_info["is_numeric"] = is_num_new
             if is_num_new:
-              attr_info["values"] = []
+              attr_info["values"] = {}
             save_db(db)
             st.rerun()
 
@@ -313,25 +326,30 @@ with tab_glossary:
         st.markdown("---")
 
         if not attr_info.get("is_numeric", False):
-          vals = attr_info.get("values", [])
-          st.markdown(f"**Уникальных текстовых значений:** `{len(vals)}`")
+          vals_dict = attr_info.get("values", {})
+          if isinstance(vals_dict, list):
+            vals_dict = {v: 1 for v in vals_dict}
+            attr_info["values"] = vals_dict
 
-          if vals:
+          st.markdown(
+              f"**Уникальных текстовых значений:** `{len(vals_dict)}`"
+          )
+
+          if vals_dict:
             if st.button(
                 "🗑️ Удалить выбранные значения",
                 key=f"del_vals_{active_attr}",
             ):
               vals_to_del = [
                   v
-                  for v in vals
+                  for v in vals_dict.keys()
                   if st.session_state.get(
                       f"chk_val_{active_attr}_{hash(v)}", False
                   )
               ]
               if vals_to_del:
                 for v in vals_to_del:
-                  if v in attr_info["values"]:
-                    attr_info["values"].remove(v)
+                  vals_dict.pop(v, None)
                 save_db(db)
                 st.success(f"Успешно удалено значений: {len(vals_to_del)}")
                 st.rerun()
@@ -340,7 +358,11 @@ with tab_glossary:
 
             st.markdown("---")
 
-            for v in vals:
+            # Вывод значений с их частотностью (отсортировано по частоте от частых к редким)
+            sorted_vals = sorted(
+                vals_dict.items(), key=lambda x: x[1], reverse=True
+            )
+            for v, freq in sorted_vals:
               vc1, vc2 = st.columns([1, 15])
               with vc1:
                 st.checkbox(
@@ -349,7 +371,7 @@ with tab_glossary:
                     label_visibility="collapsed",
                 )
               with vc2:
-                st.text(v)
+                st.text(f"{v}  —  ({freq} раз)")
           else:
             st.info("Список значений пуст.")
         else:
