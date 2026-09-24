@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base_v7.json"
+DB_FILE = "mdm_knowledge_base_v8.json"
 
 
 def load_db():
@@ -20,7 +20,7 @@ def load_db():
     except:
       pass
   return {
-      "categories": {},  # { "Полный путь бредкрамба": { "required_attributes": [] } }
+      "categories": {},  # { "Полный путь": { "required_attributes": [] } }
       "breadcrumbs_tree": [],  # Все уникальные цепочки хлебных крошек
       "global_glossary": {},  # Глоссарий характеристик
       "base_columns": [
@@ -101,7 +101,6 @@ with tab_import:
     if cat_col and cat_col in df.columns:
       unique_bcs = df[cat_col].dropna().astype(str).unique().tolist()
       for bc in unique_bcs:
-        # Нормализуем разделители и пробелы в цепочке
         parts = [p.strip() for p in bc.split(">") if p.strip()]
         if not parts:
           continue
@@ -110,7 +109,6 @@ with tab_import:
         if normalized_chain not in full_bc_chains:
           full_bc_chains.append(normalized_chain)
 
-        # Регистрируем каждый уровень и полный путь как категорию в базе
         current_path = []
         for part in parts:
           current_path.append(part)
@@ -181,39 +179,43 @@ with tab_import:
       )
 
 # ==========================================
-# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИЙ (ДРЕВОВИДНОЕ ОТОБРАЖЕНИЕ)
+# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ (ДРЕВОВИДНОЕ ИНТЕРАКТИВНОЕ ДЕРЕВО)
 # ==========================================
 with tab_structure:
   st.subheader("📂 Иерархическое дерево структуры каталога")
-  col_s1, col_s2 = st.columns([6, 4], gap="large")
+  categories = db["categories"]
 
-  with col_s1:
-    st.markdown("### 🌲 Древовидная структура `breadcrumbs`")
-    if not db["breadcrumbs_tree"]:
-      st.info("Цепочки пока не загружены.")
-    else:
-      # Строим дерево на основе цепочек
-      for idx, chain in enumerate(sorted(db["breadcrumbs_tree"]), 1):
-        parts = [p.strip() for p in chain.split(">")]
-        indent = "&nbsp;&nbsp;&nbsp;&nbsp;" * (len(parts) - 1)
-        arrow = "📂" if len(parts) == 1 else "├── 📁"
-        formatted_line = (
-            f"{indent}{arrow} **{parts[-1]}** &nbsp;&nbsp;`({chain})`"
+  if not categories:
+    st.info("Сначала загрузите файлы, чтобы сформировать структуру.")
+  else:
+    # Функция для построения древовидного словаря
+    def build_tree(chains):
+      tree = {}
+      for chain in chains:
+        parts = [p.strip() for p in chain.split(">") if p.strip()]
+        current = tree
+        for part in parts:
+          if part not in current:
+            current[part] = {}
+          current = current[part]
+      return tree
+
+    # Рекурсивная отрисовка дерева через раскрывающиеся списки (st.expander) или блоки
+    def render_tree(subtree, prefix_path=""):
+      for name, sub in sorted(subtree.items()):
+        current_path = (
+            f"{prefix_path} > {name}" if prefix_path else name
         )
-        st.markdown(formatted_line, unsafe_allow_html=True)
+        has_children = len(sub) > 0
 
-  with col_s2:
-    st.markdown("### 📑 Все уровни категорий")
-    categories = db["categories"]
-    if not categories:
-      st.info("Категории появятся после загрузки файлов.")
-    else:
-      st.write(f"Всего зарегистрированных узлов в структуре: {len(categories)}")
-      with st.expander("Посмотреть список всех путей"):
-        for cat_path in sorted(categories.keys()):
-          level = cat_path.count(">")
-          prefix = "—" * level
-          st.text(f"{prefix} {cat_path}")
+        if has_children:
+          with st.expander(f"📁 {name}", expanded=False):
+            render_tree(sub, current_path)
+        else:
+          st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;📄 `{name}`")
+
+    tree_dict = build_tree(db["breadcrumbs_tree"])
+    render_tree(tree_dict)
 
 # ==========================================
 # ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ (ДВУХКОЛОНОЧНЫЙ ИНТЕРФЕЙС)
@@ -227,7 +229,6 @@ with tab_glossary:
   else:
     col_left, col_right = st.columns([4, 6], gap="large")
 
-    # --- ЛЕВАЯ КОЛОНКА: Список заголовков с чекбоксами ---
     with col_left:
       st.markdown("### 📋 Заголовки характеристик")
 
@@ -294,7 +295,6 @@ with tab_glossary:
             st.session_state.active_attr = attr
             st.rerun()
 
-    # --- ПРАВАЯ КОЛОНКА: Детали выбранного заголовка ---
     with col_right:
       active_attr = st.session_state.get("active_attr")
       if not active_attr or active_attr not in glossary:
