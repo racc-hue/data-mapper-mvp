@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base_v6.json"
+DB_FILE = "mdm_knowledge_base_v7.json"
 
 
 def load_db():
@@ -20,11 +20,9 @@ def load_db():
     except:
       pass
   return {
-      "categories": {},  # { "Категория": { "required_attributes": [] } }
-      "breadcrumbs_tree": [],  # Все цепочки хлебных крошек
-      "global_glossary": (
-          {}
-      ),  # { "Характеристика": { "values": {val: count}, "is_numeric": False, "total_filled": 0 } }
+      "categories": {},  # { "Полный путь бредкрамба": { "required_attributes": [] } }
+      "breadcrumbs_tree": [],  # Все уникальные цепочки хлебных крошек
+      "global_glossary": {},  # Глоссарий характеристик
       "base_columns": [
           "артикул",
           "код",
@@ -103,12 +101,22 @@ with tab_import:
     if cat_col and cat_col in df.columns:
       unique_bcs = df[cat_col].dropna().astype(str).unique().tolist()
       for bc in unique_bcs:
-        if bc not in full_bc_chains:
-          full_bc_chains.append(bc)
-        parts = bc.split(">")
-        leaf_cat = parts[-1].strip()
-        if leaf_cat not in db["categories"]:
-          db["categories"][leaf_cat] = {"required_attributes": []}
+        # Нормализуем разделители и пробелы в цепочке
+        parts = [p.strip() for p in bc.split(">") if p.strip()]
+        if not parts:
+          continue
+        normalized_chain = " > ".join(parts)
+
+        if normalized_chain not in full_bc_chains:
+          full_bc_chains.append(normalized_chain)
+
+        # Регистрируем каждый уровень и полный путь как категорию в базе
+        current_path = []
+        for part in parts:
+          current_path.append(part)
+          path_str = " > ".join(current_path)
+          if path_str not in db["categories"]:
+            db["categories"][path_str] = {"required_attributes": []}
 
     if st.button("🚀 Обработать файл и обновить базу данных", type="primary"):
       for chain in full_bc_chains:
@@ -135,15 +143,11 @@ with tab_import:
                   "total_filled": 0,
               }
 
-            # Суммируем общее количество заполненных ячеек
             db["global_glossary"][col]["total_filled"] = (
                 db["global_glossary"][col].get("total_filled", 0) + filled_count
             )
-
-            # Проверяем уникальные значения и считаем их частотность
             val_counts = Counter(vals_raw)
 
-            # Проверка на числовой тип по всем значениям
             all_numeric = True
             for v in val_counts.keys():
               cleaned_v = (
@@ -158,7 +162,6 @@ with tab_import:
             if all_numeric:
               db["global_glossary"][col]["is_numeric"] = True
             else:
-              # Если старые данные хранились как список, конвертируем в словарь для совместимости
               if isinstance(db["global_glossary"][col]["values"], list):
                 old_list = db["global_glossary"][col]["values"]
                 db["global_glossary"][col]["values"] = {
@@ -178,28 +181,39 @@ with tab_import:
       )
 
 # ==========================================
-# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ
+# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИЙ (ДРЕВОВИДНОЕ ОТОБРАЖЕНИЕ)
 # ==========================================
 with tab_structure:
-  st.subheader("📂 Дерево структуры и подкатегории")
-  col_s1, col_s2 = st.columns(2)
+  st.subheader("📂 Иерархическое дерево структуры каталога")
+  col_s1, col_s2 = st.columns([6, 4], gap="large")
 
   with col_s1:
-    st.markdown("### 🌲 Накопленные цепочки `breadcrumbs`")
+    st.markdown("### 🌲 Древовидная структура `breadcrumbs`")
     if not db["breadcrumbs_tree"]:
       st.info("Цепочки пока не загружены.")
     else:
-      for idx, chain in enumerate(db["breadcrumbs_tree"], 1):
-        st.code(f"{idx}. {chain}")
+      # Строим дерево на основе цепочек
+      for idx, chain in enumerate(sorted(db["breadcrumbs_tree"]), 1):
+        parts = [p.strip() for p in chain.split(">")]
+        indent = "&nbsp;&nbsp;&nbsp;&nbsp;" * (len(parts) - 1)
+        arrow = "📂" if len(parts) == 1 else "├── 📁"
+        formatted_line = (
+            f"{indent}{arrow} **{parts[-1]}** &nbsp;&nbsp;`({chain})`"
+        )
+        st.markdown(formatted_line, unsafe_allow_html=True)
 
   with col_s2:
-    st.markdown("### 📑 Зарегистрированные подкатегории")
+    st.markdown("### 📑 Все уровни категорий")
     categories = db["categories"]
     if not categories:
-      st.info("Подкатегории появятся после загрузки файлов.")
+      st.info("Категории появятся после загрузки файлов.")
     else:
-      for cat_name in categories.keys():
-        st.markdown(f"- 📁 **{cat_name}**")
+      st.write(f"Всего зарегистрированных узлов в структуре: {len(categories)}")
+      with st.expander("Посмотреть список всех путей"):
+        for cat_path in sorted(categories.keys()):
+          level = cat_path.count(">")
+          prefix = "—" * level
+          st.text(f"{prefix} {cat_path}")
 
 # ==========================================
 # ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ (ДВУХКОЛОНОЧНЫЙ ИНТЕРФЕЙС)
@@ -256,7 +270,7 @@ with tab_glossary:
           badge = f"[только числовые: {total_filled} зап.]"
         else:
           vals_dict = info.get("values", {})
-          if isinstance(vals_dict, list):  # Обратная совместимость со старыми базами
+          if isinstance(vals_dict, list):
             vals_dict = {v: 1 for v in vals_dict}
             info["values"] = vals_dict
           unique_count = len(vals_dict)
@@ -358,7 +372,6 @@ with tab_glossary:
 
             st.markdown("---")
 
-            # Вывод значений с их частотностью (отсортировано по частоте от частых к редким)
             sorted_vals = sorted(
                 vals_dict.items(), key=lambda x: x[1], reverse=True
             )
@@ -391,7 +404,7 @@ with tab_required:
     st.info("Сначала загрузите файлы, чтобы появились подкатегории.")
   else:
     selected_cat = st.selectbox(
-        "Выберите подкатегорию", list(categories.keys()), key="req_box"
+        "Выберите подкатегорию", sorted(categories.keys()), key="req_box"
     )
 
     if selected_cat:
@@ -400,7 +413,7 @@ with tab_required:
 
       st.write(
           "Отметьте галочками заголовки, которые должны быть обязательными"
-          f" для подкатегории **{selected_cat}**:"
+          f" для узла **{selected_cat}**:"
       )
 
       new_reqs = []
