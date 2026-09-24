@@ -8,7 +8,7 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base_v4.json"
+DB_FILE = "mdm_knowledge_base_v5.json"
 
 
 def load_db():
@@ -21,7 +21,9 @@ def load_db():
   return {
       "categories": {},  # { "Категория": { "required_attributes": [] } }
       "breadcrumbs_tree": [],  # Все цепочки хлебных крошек
-      "global_glossary": {},  # { "Характеристика": { "values": [...], "is_numeric": False } }
+      "global_glossary": (
+          {}
+      ),  # { "Характеристика": { "values": [...], "is_numeric": False, "total_filled": 0 } }
       "base_columns": [
           "артикул",
           "код",
@@ -119,14 +121,29 @@ with tab_import:
         col_lower = str(col).lower()
         is_base = any(kw in col_lower for kw in base_keywords)
         if not is_base:
-          vals = df[col].dropna().astype(str).unique().tolist()
-          vals = [v.strip() for v in vals if v.strip()]
-          if vals:
-            if col not in db["global_glossary"]:
-              db["global_glossary"][col] = {"values": [], "is_numeric": False}
+          # Получаем непустые элементы для подсчета заполненности
+          col_series = df[col].dropna()
+          vals_raw = col_series.astype(str).tolist()
+          vals_raw = [v.strip() for v in vals_raw if v.strip()]
+          filled_count = len(vals_raw)
 
+          if filled_count > 0:
+            if col not in db["global_glossary"]:
+              db["global_glossary"][col] = {
+                  "values": [],
+                  "is_numeric": False,
+                  "total_filled": 0,
+              }
+
+            # Суммируем общее количество заполненных ячеек
+            db["global_glossary"][col]["total_filled"] = (
+                db["global_glossary"][col].get("total_filled", 0) + filled_count
+            )
+
+            # Проверка на числовой тип
+            unique_vals = list(set(vals_raw))
             all_numeric = True
-            for v in vals:
+            for v in unique_vals:
               cleaned_v = (
                   v.replace(",", ".").replace(" ", "").replace("%", "")
               )
@@ -139,7 +156,7 @@ with tab_import:
             if all_numeric:
               db["global_glossary"][col]["is_numeric"] = True
             else:
-              for v in vals:
+              for v in unique_vals:
                 if v not in db["global_glossary"][col]["values"]:
                   db["global_glossary"][col]["values"].append(v)
 
@@ -187,11 +204,10 @@ with tab_glossary:
   else:
     col_left, col_right = st.columns([4, 6], gap="large")
 
-    # --- ЛЕВАЯ КОЛОНКА: Список заголовков с чекбоксами и кнопкой выбора ---
+    # --- ЛЕВАЯ КОЛОНКА: Список заголовков с чекбоксами ---
     with col_left:
       st.markdown("### 📋 Заголовки характеристик")
 
-      # Кнопка массового удаления выбранных заголовков
       if st.button(
           "🗑️ Удалить выбранные заголовки",
           type="primary",
@@ -206,7 +222,6 @@ with tab_glossary:
           for attr in to_delete:
             glossary.pop(attr, None)
           save_db(db)
-          # Сбрасываем активный выбор если он был удален
           if st.session_state.get("active_attr") in to_delete:
             st.session_state.active_attr = None
           st.success(f"Успешно удалено заголовков: {len(to_delete)}")
@@ -216,7 +231,6 @@ with tab_glossary:
 
       st.markdown("---")
 
-      # Установка активного заголовка по умолчанию
       all_attrs = list(glossary.keys())
       if (
           "active_attr" not in st.session_state
@@ -224,31 +238,36 @@ with tab_glossary:
       ):
         st.session_state.active_attr = all_attrs[0] if all_attrs else None
 
-      # Вывод списка заголовков
       for attr in all_attrs:
         info = glossary[attr]
         is_num = info.get("is_numeric", False)
-        badge = (
-            "[только числовые]"
-            if is_num
-            else f"({len(info.get('values', []))} знач.)"
-        )
+        total_filled = info.get("total_filled", 0)
+
+        if is_num:
+          badge = f"[только числовые: {total_filled} зап.]"
+        else:
+          unique_count = len(info.get("values", []))
+          badge = f"({unique_count} уник. / {total_filled} зап.)"
 
         c_chk, c_btn = st.columns([1, 10])
         with c_chk:
           st.checkbox("", key=f"chk_attr_{attr}", label_visibility="collapsed")
         with c_btn:
-          # Делаем активную кнопку подсветкой
           btn_type = (
               "primary"
               if st.session_state.active_attr == attr
               else "secondary"
           )
-          if st.button(f"{attr} {badge}", key=f"btn_attr_{attr}", use_container_width=True, type=btn_type):
+          if st.button(
+              f"{attr} {badge}",
+              key=f"btn_attr_{attr}",
+              use_container_width=True,
+              type=btn_type,
+          ):
             st.session_state.active_attr = attr
             st.rerun()
 
-    # --- ПРАВАЯ КОЛОНКА: Детали выбранного заголовка и значений ---
+    # --- ПРАВАЯ КОЛОНКА: Детали выбранного заголовка ---
     with col_right:
       active_attr = st.session_state.get("active_attr")
       if not active_attr or active_attr not in glossary:
@@ -257,7 +276,6 @@ with tab_glossary:
         st.markdown(f"### ⚙️ Редактирование: `{active_attr}`")
         attr_info = glossary[active_attr]
 
-        # Переименование и тип данных
         rc1, rc2 = st.columns(2)
         with rc1:
           new_name = st.text_input(
@@ -288,15 +306,17 @@ with tab_glossary:
             save_db(db)
             st.rerun()
 
+        st.markdown(
+            f"**Всего заполненных ячеек в выгрузках:**"
+            f" `{attr_info.get('total_filled', 0)}`"
+        )
         st.markdown("---")
 
-        # Список значений и массовое удаление
         if not attr_info.get("is_numeric", False):
           vals = attr_info.get("values", [])
-          st.markdown(f"**Уникальных значений:** `{len(vals)}`")
+          st.markdown(f"**Уникальных текстовых значений:** `{len(vals)}`")
 
           if vals:
-            # Кнопка массового удаления выбранных значений
             if st.button(
                 "🗑️ Удалить выбранные значения",
                 key=f"del_vals_{active_attr}",
@@ -320,7 +340,6 @@ with tab_glossary:
 
             st.markdown("---")
 
-            # Список значений с чекбоксами (скроллируемая область)
             for v in vals:
               vc1, vc2 = st.columns([1, 15])
               with vc1:
