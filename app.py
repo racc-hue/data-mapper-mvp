@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base_v8.json"
+DB_FILE = "mdm_knowledge_base_v9.json"
 
 
 def load_db():
@@ -99,22 +99,27 @@ with tab_import:
 
     full_bc_chains = []
     if cat_col and cat_col in df.columns:
-      unique_bcs = df[cat_col].dropna().astype(str).unique().tolist()
-      for bc in unique_bcs:
-        parts = [p.strip() for p in bc.split(">") if p.strip()]
-        if not parts:
-          continue
-        normalized_chain = " > ".join(parts)
+      # Проходим по всем ячейкам колонки категорий
+      unique_cells = df[cat_col].dropna().astype(str).unique().tolist()
+      for cell in unique_cells:
+        # Товар может принадлежать нескольким веткам, разделенным точкой с запятой ';'
+        sub_branches = cell.split(";")
+        for branch in sub_branches:
+          parts = [p.strip() for p in branch.split(">") if p.strip()]
+          if not parts:
+            continue
+          normalized_chain = " > ".join(parts)
 
-        if normalized_chain not in full_bc_chains:
-          full_bc_chains.append(normalized_chain)
+          if normalized_chain not in full_bc_chains:
+            full_bc_chains.append(normalized_chain)
 
-        current_path = []
-        for part in parts:
-          current_path.append(part)
-          path_str = " > ".join(current_path)
-          if path_str not in db["categories"]:
-            db["categories"][path_str] = {"required_attributes": []}
+          # Регистрируем каждый уровень иерархии в базе категорий
+          current_path = []
+          for part in parts:
+            current_path.append(part)
+            path_str = " > ".join(current_path)
+            if path_str not in db["categories"]:
+              db["categories"][path_str] = {"required_attributes": []}
 
     if st.button("🚀 Обработать файл и обновить базу данных", type="primary"):
       for chain in full_bc_chains:
@@ -179,7 +184,7 @@ with tab_import:
       )
 
 # ==========================================
-# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ (ДРЕВОВИДНОЕ ИНТЕРАКТИВНОЕ ДЕРЕВО)
+# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ (ИЕРАРХИЧЕСКОЕ ДЕРЕВО)
 # ==========================================
 with tab_structure:
   st.subheader("📂 Иерархическое дерево структуры каталога")
@@ -188,7 +193,7 @@ with tab_structure:
   if not categories:
     st.info("Сначала загрузите файлы, чтобы сформировать структуру.")
   else:
-    # Функция для построения древовидного словаря
+
     def build_tree(chains):
       tree = {}
       for chain in chains:
@@ -200,17 +205,12 @@ with tab_structure:
           current = current[part]
       return tree
 
-    # Рекурсивная отрисовка дерева через раскрывающиеся списки (st.expander) или блоки
-    def render_tree(subtree, prefix_path=""):
+    def render_tree(subtree):
       for name, sub in sorted(subtree.items()):
-        current_path = (
-            f"{prefix_path} > {name}" if prefix_path else name
-        )
         has_children = len(sub) > 0
-
         if has_children:
           with st.expander(f"📁 {name}", expanded=False):
-            render_tree(sub, current_path)
+            render_tree(sub)
         else:
           st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;📄 `{name}`")
 
