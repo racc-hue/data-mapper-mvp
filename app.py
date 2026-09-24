@@ -9,20 +9,25 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base_v9.json"
+DB_FILE = "mdm_knowledge_base_v10.json"
 
 
 def load_db():
   if os.path.exists(DB_FILE):
     try:
       with open(DB_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+        # Убедимся, что новые ключи присутствуют
+        if "known_articles" not in data:
+          data["known_articles"] = []
+        return data
     except:
       pass
   return {
       "categories": {},  # { "Полный путь": { "required_attributes": [] } }
       "breadcrumbs_tree": [],  # Все уникальные цепочки хлебных крошек
       "global_glossary": {},  # Глоссарий характеристик
+      "known_articles": [],  # Список уже обработанных артикулов (для защиты от дублей)
       "base_columns": [
           "артикул",
           "код",
@@ -57,10 +62,51 @@ tab_import, tab_structure, tab_glossary, tab_required = st.tabs([
 ])
 
 # ==========================================
-# ВКЛАДКА 1: ЗАГРУЗКА ФАЙЛОВ
+# ВКЛАДКА 1: ЗАГРУЗКА ФАЙЛОВ И УПРАВЛЕНИЕ БАЗОЙ
 # ==========================================
 with tab_import:
-  st.subheader("Импорт файлов выгрузки сайта")
+  st.subheader("💾 Управление базой данных (.json)")
+
+  db_col1, db_col2 = st.columns(2)
+
+  with db_col1:
+    # Экспорт текущей БД в JSON
+    db_json_bytes = json.dumps(db, ensure_ascii=False, indent=4).encode(
+        "utf-8"
+    )
+    st.download_button(
+        label="📥 Скачать базу данных (.json)",
+        data=db_json_bytes,
+        file_name="mdm_database_backup.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+  with db_col2:
+    # Импорт (загрузка) ранее сохраненной БД из JSON
+    uploaded_db_file = st.file_uploader(
+        "📤 Загрузить готовую базу данных (.json)",
+        type=["json"],
+        key="up_json_db",
+    )
+    if uploaded_db_file is not None:
+      try:
+        imported_data = json.load(uploaded_db_file)
+        if isinstance(imported_data, dict) and "categories" in imported_data:
+          db.clear()
+          db.update(imported_data)
+          if "known_articles" not in db:
+            db["known_articles"] = []
+          save_db(db)
+          st.success("✅ База данных успешно восстановлена из файла!")
+          st.rerun()
+        else:
+          st.error("Неверный формат структуры JSON базы данных.")
+      except Exception as e:
+        st.error(f"Ошибка при разборе JSON: {e}")
+
+  st.markdown("---")
+  st.subheader("📥 Импорт файлов выгрузки сайта")
   uploaded_file = st.file_uploader(
       "Загрузите Excel или CSV выгрузку", type=["xlsx", "xls", "csv"], key="up_main"
   )
@@ -89,102 +135,149 @@ with tab_import:
       st.error(f"Ошибка чтения файла: {e}")
       st.stop()
 
-    st.success(f"Файл загружен. Строк: {len(df)}, Колонок: {len(df.columns)}")
+    st.info(f"Исходных строк в файле: {len(df)}")
 
-    cat_col = None
+    # Ищем колонку артикула
+    art_col = None
     for c in df.columns:
-      if "breadcrumb" in c.lower() or "крошк" in c.lower() or "раздел" in c.lower():
-        cat_col = c
+      c_low = str(c).lower()
+      if c_low in ["артикул", "artikul", "article", "sku", "код"]:
+        art_col = c
         break
 
-    full_bc_chains = []
-    if cat_col and cat_col in df.columns:
-      # Проходим по всем ячейкам колонки категорий
-      unique_cells = df[cat_col].dropna().astype(str).unique().tolist()
-      for cell in unique_cells:
-        # Товар может принадлежать нескольким веткам, разделенным точкой с запятой ';'
-        sub_branches = cell.split(";")
-        for branch in sub_branches:
-          parts = [p.strip() for p in branch.split(">") if p.strip()]
-          if not parts:
-            continue
-          normalized_chain = " > ".join(parts)
+    # Фильтрация строк по уже известным артикулам
+    known_set = set(str(x) for x in db.get("known_articles", []))
+    if art_col and art_col in df.columns and known_set:
+      # Оставляем только те строки, у которых артикул еще не зафиксирован в базе
+      initial_len = len(df)
+      df = df[
+          ~df[art_col]
+          .astype(str)
+          .str.strip()
+          .isin(known_set)
+          | df[art_col].isna()
+      ]
+      skipped_count = initial_len - len(df)
+      if skipped_count > 0:
+        st.warning(
+            f"⚠️ Пропущено дублирующихся строк (артикулы уже есть в базе):"
+            f" `{skipped_count}`"
+        )
 
-          if normalized_chain not in full_bc_chains:
-            full_bc_chains.append(normalized_chain)
+    st.success(f"Строк к обработке после фильтрации: {len(df)}")
 
-          # Регистрируем каждый уровень иерархии в базе категорий
-          current_path = []
-          for part in parts:
-            current_path.append(part)
-            path_str = " > ".join(current_path)
-            if path_str not in db["categories"]:
-              db["categories"][path_str] = {"required_attributes": []}
+    if len(df) == 0:
+      st.warning(
+          "В файле не осталось новых строк для обработки (все артикулы уже"
+          " присутствуют в базе)."
+      )
+    else:
+      cat_col = None
+      for c in df.columns:
+        if (
+            "breadcrumb" in c.lower()
+            or "крошк" in c.lower()
+            or "раздел" in c.lower()
+        ):
+          cat_col = c
+          break
 
-    if st.button("🚀 Обработать файл и обновить базу данных", type="primary"):
-      for chain in full_bc_chains:
-        if chain not in db["breadcrumbs_tree"]:
-          db["breadcrumbs_tree"].append(chain)
+      full_bc_chains = []
+      if cat_col and cat_col in df.columns:
+        unique_cells = df[cat_col].dropna().astype(str).unique().tolist()
+        for cell in unique_cells:
+          sub_branches = cell.split(";")
+          for branch in sub_branches:
+            parts = [p.strip() for p in branch.split(">") if p.strip()]
+            if not parts:
+              continue
+            normalized_chain = " > ".join(parts)
 
-      base_keywords = db["base_columns"]
-      added_attrs = 0
+            if normalized_chain not in full_bc_chains:
+              full_bc_chains.append(normalized_chain)
 
-      for col in df.columns:
-        col_lower = str(col).lower()
-        is_base = any(kw in col_lower for kw in base_keywords)
-        if not is_base:
-          col_series = df[col].dropna()
-          vals_raw = col_series.astype(str).tolist()
-          vals_raw = [v.strip() for v in vals_raw if v.strip()]
-          filled_count = len(vals_raw)
+            current_path = []
+            for part in parts:
+              current_path.append(part)
+              path_str = " > ".join(current_path)
+              if path_str not in db["categories"]:
+                db["categories"][path_str] = {"required_attributes": []}
 
-          if filled_count > 0:
-            if col not in db["global_glossary"]:
-              db["global_glossary"][col] = {
-                  "values": {},
-                  "is_numeric": False,
-                  "total_filled": 0,
-              }
+      if st.button("🚀 Обработать файл и обновить базу данных", type="primary"):
+        # Добавляем цепочки крошек
+        for chain in full_bc_chains:
+          if chain not in db["breadcrumbs_tree"]:
+            db["breadcrumbs_tree"].append(chain)
 
-            db["global_glossary"][col]["total_filled"] = (
-                db["global_glossary"][col].get("total_filled", 0) + filled_count
-            )
-            val_counts = Counter(vals_raw)
+        # Собираем артикулы в список обработанных
+        new_articles_added = 0
+        if art_col and art_col in df.columns:
+          batch_arts = df[art_col].dropna().astype(str).str.strip().tolist()
+          for art in batch_arts:
+            if art and art not in db["known_articles"]:
+              db["known_articles"].append(art)
+              new_articles_added += 1
 
-            all_numeric = True
-            for v in val_counts.keys():
-              cleaned_v = (
-                  v.replace(",", ".").replace(" ", "").replace("%", "")
-              )
-              try:
-                float(cleaned_v)
-              except ValueError:
-                all_numeric = False
-                break
+        base_keywords = db["base_columns"]
+        added_attrs = 0
 
-            if all_numeric:
-              db["global_glossary"][col]["is_numeric"] = True
-            else:
-              if isinstance(db["global_glossary"][col]["values"], list):
-                old_list = db["global_glossary"][col]["values"]
-                db["global_glossary"][col]["values"] = {
-                    v: 1 for v in old_list
+        for col in df.columns:
+          col_lower = str(col).lower()
+          is_base = any(kw in col_lower for kw in base_keywords)
+          if not is_base:
+            col_series = df[col].dropna()
+            vals_raw = col_series.astype(str).tolist()
+            vals_raw = [v.strip() for v in vals_raw if v.strip()]
+            filled_count = len(vals_raw)
+
+            if filled_count > 0:
+              if col not in db["global_glossary"]:
+                db["global_glossary"][col] = {
+                    "values": {},
+                    "is_numeric": False,
+                    "total_filled": 0,
                 }
 
-              for v, cnt in val_counts.items():
-                current_dict = db["global_glossary"][col]["values"]
-                current_dict[v] = current_dict.get(v, 0) + cnt
+              db["global_glossary"][col]["total_filled"] = (
+                  db["global_glossary"][col].get("total_filled", 0)
+                  + filled_count
+              )
+              val_counts = Counter(vals_raw)
 
-            added_attrs += 1
+              all_numeric = True
+              for v in val_counts.keys():
+                cleaned_v = (
+                    v.replace(",", ".").replace(" ", "").replace("%", "")
+                )
+                try:
+                  float(cleaned_v)
+                except ValueError:
+                  all_numeric = False
+                  break
 
-      save_db(db)
-      st.success(
-          f"✅ Успешно! Обработано характеристик: {added_attrs}. Глоссарий"
-          " обновлен."
-      )
+              if all_numeric:
+                db["global_glossary"][col]["is_numeric"] = True
+              else:
+                if isinstance(db["global_glossary"][col]["values"], list):
+                  old_list = db["global_glossary"][col]["values"]
+                  db["global_glossary"][col]["values"] = {
+                      v: 1 for v in old_list
+                  }
+
+                for v, cnt in val_counts.items():
+                  current_dict = db["global_glossary"][col]["values"]
+                  current_dict[v] = current_dict.get(v, 0) + cnt
+
+              added_attrs += 1
+
+        save_db(db)
+        st.success(
+            f"✅ Успешно! Добавлено новых артикулов: {new_articles_added}."
+            f" Обработано характеристик: {added_attrs}. База данных сохранена."
+        )
 
 # ==========================================
-# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ (ИЕРАРХИЧЕСКОЕ ДЕРЕВО)
+# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ
 # ==========================================
 with tab_structure:
   st.subheader("📂 Иерархическое дерево структуры каталога")
@@ -218,7 +311,7 @@ with tab_structure:
     render_tree(tree_dict)
 
 # ==========================================
-# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ (ДВУХКОЛОНОЧНЫЙ ИНТЕРФЕЙС)
+# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ
 # ==========================================
 with tab_glossary:
   st.subheader("📚 Управление глоссарием и массовое удаление")
