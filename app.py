@@ -20,9 +20,7 @@ def load_db():
       pass
   return {
       "categories": {},  # { "Категория": { "required_attributes": [] } }
-      "breadcrumbs_tree": (
-          []
-      ),  # Все уникальные цепочки хлебных крошек из выгрузок
+      "breadcrumbs_tree": [],  # Все уникальные цепочки хлебных крошек
       "global_glossary": {},  # { "Характеристика": [значение1, значение2, ...] }
       "base_columns": [
           "артикул",
@@ -50,7 +48,6 @@ db = load_db()
 
 st.title("🧠 MDM-Система управления каталогом и глоссарием")
 
-# Четыре основные вкладки под ваши задачи
 tab_import, tab_structure, tab_glossary, tab_required = st.tabs([
     "📥 Загрузка файлов",
     "📂 Структура и категории",
@@ -89,6 +86,7 @@ with tab_import:
             sep=None,
             engine="python",
             encoding_errors="replace",
+            on_bad_lines="skip",
         )
       else:
         df = pd.read_excel(uploaded_file)
@@ -112,7 +110,6 @@ with tab_import:
       for bc in unique_bcs:
         if bc not in full_bc_chains:
           full_bc_chains.append(bc)
-        # Берем последнюю подкатегорию для примера
         parts = bc.split(">")
         leaf_cat = parts[-1].strip()
         if leaf_cat not in db["categories"]:
@@ -121,12 +118,10 @@ with tab_import:
     st.info(f"📂 Найдено уникальных цепочек крошек в файле: {len(full_bc_chains)}")
 
     if st.button("🚀 Обработать файл и обновить базу данных", type="primary"):
-      # Сохраняем новые цепочки крошек
       for chain in full_bc_chains:
         if chain not in db["breadcrumbs_tree"]:
           db["breadcrumbs_tree"].append(chain)
 
-      # Собираем характеристики и их значения
       base_keywords = db["base_columns"]
       added_attrs = 0
 
@@ -151,15 +146,10 @@ with tab_import:
       )
 
 # ==========================================
-# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ (РАСШИРЯЕМАЯ)
+# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ
 # ==========================================
 with tab_structure:
   st.subheader("📂 Дерево структуры и подкатегории")
-  st.write(
-      "Здесь отображается полная иерархия структуры, которая накапливается и"
-      " расширяется по мере загрузки новых файлов выгрузок."
-  )
-
   col_s1, col_s2 = st.columns(2)
 
   with col_s1:
@@ -180,21 +170,15 @@ with tab_structure:
         st.markdown(f"- 📁 **{cat_name}**")
 
 # ==========================================
-# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ (КОМПАКТНЫЙ)
+# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ
 # ==========================================
 with tab_glossary:
   st.subheader("📚 Компактный редактор глоссария и значений")
-  st.write(
-      "Управляйте заголовками и взаимодействуйте со списком «съеденных»"
-      " значений точечно."
-  )
-
   glossary = db["global_glossary"]
 
   if not glossary:
     st.info("Глоссарий пуст. Загрузите файл на первой вкладке.")
   else:
-    # Компактный интерфейс с помощью селектора или мини-карточек
     selected_attr = st.selectbox(
         "Выберите характеристику для управления значениями", list(glossary.keys())
     )
@@ -223,7 +207,6 @@ with tab_glossary:
           f"**Уникальных значений в характеристике:** `{len(values_list)}`"
       )
 
-      # Компактный блок взаимодействия со значениями
       with st.expander(
           "👁️ Посмотреть и отредактировать значения (удалить лишнее)"
       ):
