@@ -3,28 +3,57 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Маппер прайсов", page_icon="📊", layout="wide"
+    page_title="Маппер данных", page_icon="📊", layout="wide"
 )
 
-st.title("🧠 Умный маппер прайсов поставщиков")
+st.title("Маппер данных поставщиков")
 st.write(
     "Инструмент для нормализации характеристик и подготовки данных для сайта."
 )
 
 # 1. Загрузка файла
 uploaded_file = st.file_uploader(
-    "Загрузите прайс-лист поставщика (Excel или CSV)", type=["xlsx", "xls", "csv"]
+    "Загрузите прайс-лист поставщика или выгрузку с сайта (Excel или CSV)",
+    type=["xlsx", "xls", "csv"],
 )
 
 if uploaded_file is not None:
-  # Читаем файл
+  # Читаем файл с защитой для "кривых" выгрузок со старых сайтов
   try:
     if uploaded_file.name.endswith(".csv"):
-      df = pd.read_csv(uploaded_file)
+      raw_bytes = uploaded_file.read()
+      text_data = None
+      for enc in ["utf-8-sig", "cp1251", "utf-8", "latin1"]:
+        try:
+          text_data = raw_bytes.decode(enc)
+          break
+        except UnicodeDecodeError:
+          continue
+
+      if text_data is None:
+        raise Exception("Не удалось определить кодировку файла.")
+
+      try:
+        df = pd.read_csv(
+            io.StringIO(text_data),
+            sep=None,
+            engine="python",
+            encoding_errors="replace",
+        )
+      except Exception:
+        df = pd.read_csv(
+            io.StringIO(text_data),
+            sep=";",
+            engine="python",
+            encoding_errors="replace",
+        )
     else:
       df = pd.read_excel(uploaded_file)
   except Exception as e:
-    st.error(f"Ошибка при чтении файла: {e}")
+    st.error(
+        f"Ошибка при чтении файла выгрузки: {e}. Попробуйте открыть этот CSV в"
+        " Excel и сохранить как .xlsx"
+    )
     st.stop()
 
   st.subheader("📋 Предпросмотр исходного файла")
@@ -38,7 +67,6 @@ if uploaded_file is not None:
       "Свяжите колонки поставщика с глобальными системными характеристиками."
   )
 
-  # Интерфейс маппинга
   col1, col2, col3 = st.columns(3)
 
   with col1:
@@ -76,12 +104,10 @@ if uploaded_file is not None:
 
   st.divider()
 
-  # Кнопка валидации и экспорта
   if st.button(
       "🚀 Проверить обязательные поля и сформировать файл для сайта",
       type="primary",
   ):
-    # Симуляция проверки обязательных полей
     errors = []
     if df[map_name].isnull().any():
       errors.append("В колонке 'Наименование товара' есть пустые ячейки!")
@@ -101,16 +127,14 @@ if uploaded_file is not None:
       for err in errors:
         st.write(f"- {err}")
 
-    # Формируем итоговый датасет под стандарты сайта
     result_df = pd.DataFrame()
     result_df["product_title"] = df[map_name]
     result_df["product_price"] = df[map_price]
     result_df["product_sku"] = df[map_sku]
-    result_df["attr_dimensions"] = df[map_dims]  # Транслируем в нужный ключ сайта
+    result_df["attr_dimensions"] = df[map_dims]
 
     st.success("✅ Готово! Файл успешно отформатирован под требования сайта.")
 
-    # Кнопка скачивания результата
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
       result_df.to_excel(writer, index=False, sheet_name="Import")
@@ -124,4 +148,4 @@ if uploaded_file is not None:
         ),
     )
 else:
-  st.info("👆 Загрузите файл прайс-листа выше, чтобы начать работу.")
+  st.info("👆 Загрузите файл прайс-листа или выгрузки выше, чтобы начать работу.")
