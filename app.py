@@ -1,18 +1,17 @@
+import io
 import json
 import os
-import io
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Умный MDM-маппер прайсов", page_icon="🧠", layout="wide"
+    page_title="Гибкий MDM-маппер прайсов", page_icon="🧠", layout="wide"
 )
 
-# Файл для имитации базы данных / памяти приложения
 DB_FILE = "knowledge_base.json"
 
 
-# Загрузка базы знаний (памяти)
+# Загрузка базы знаний
 def load_db():
   if os.path.exists(DB_FILE):
     try:
@@ -20,19 +19,17 @@ def load_db():
         return json.load(f)
     except:
       pass
-  # Дефолтная структура, если файла нет
   return {
       "global_attributes": {
-          "Наименование товара": {"required": True, "synonyms": []},
-          "Цена": {"required": True, "synonyms": []},
-          "Артикул / SKU": {"required": False, "synonyms": []},
-          "Габариты (ВхШхГ)": {"required": True, "synonyms": []},
+          "Наименование товара": {"required": True},
+          "Артикул / SKU": {"required": False},
+          "Цена": {"required": False},
+          "Габариты (ВхШхГ)": {"required": False},
       },
       "templates": {},
   }
 
 
-# Сохранение базы знаний
 def save_db(data):
   with open(DB_FILE, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=4)
@@ -40,35 +37,15 @@ def save_db(data):
 
 db = load_db()
 
-st.title("🧠 Интеллектуальная система маппинга и памяти прайсов")
-st.sidebar.header("⚙️ Управление памятью и словарем")
+st.title("🧠 Гибкий маппер и нормализатор характеристик")
+st.write(
+    "Настраивайте только те поля, которые вам нужны, и управляйте"
+    " характеристиками."
+)
 
-# --- БОКОВАЯ ПАНЕЛЬ: Управление глобальными характеристиками ---
-st.sidebar.subheader("Глобальные параметры сайта")
-new_attr_name = st.sidebar.text_input("Добавить новый глобальный заголовок")
-new_attr_required = st.sidebar.checkbox("Обязательное поле для сайта")
-
-if st.sidebar.button("➕ Добавить в глобальный справочник"):
-  if new_attr_name and new_attr_name not in db["global_attributes"]:
-    db["global_attributes"]
-    db["global_attributes"][new_attr_name] = {
-        "required": new_attr_required,
-        "synonyms": [],
-    }
-    save_db(db)
-    st.sidebar.success(f"Параметр '{new_attr_name}' добавлен в память!")
-    st.rerun()
-
-st.sidebar.divider()
-st.sidebar.write("📌 **Текущие глобальные параметры в памяти:**")
-for attr, info in db["global_attributes"].items():
-  req_mark = "⭐ (обязательно)" if info["required"] else ""
-  st.sidebar.text(f"- {attr} {req_mark}")
-
-
-# --- ОСНОВНОЙ ЭКРАН ---
+# 1. Загрузка файла
 uploaded_file = st.file_uploader(
-    "Загрузите прайс-лист поставщика или выгрузку (Excel / CSV)",
+    "Загрузите прайс-лист поставщика или выгрузку с сайта (Excel или CSV)",
     type=["xlsx", "xls", "csv"],
 )
 
@@ -95,104 +72,138 @@ if uploaded_file is not None:
     st.error(f"Ошибка чтения файла: {e}")
     st.stop()
 
-  st.subheader("📋 Предпросмотр загруженного файла")
+  st.subheader("📋 Предпросмотр исходного файла")
   st.dataframe(df.head(3), use_container_width=True)
   columns = list(df.columns)
 
   st.divider()
-  st.subheader("🔗 Интерактивный маппинг и обучение")
+  st.subheader("⚙️ Шаг 1: Выберите, какие параметры участвуют в этом маппинге")
+  st.write(
+      "Отметьте галочками только те характеристики, которые вам действительно"
+      " нужны в этот раз. Лишнее можно отключить."
+  )
 
-  # Выбор сохраненного профиля (если есть)
+  # Блок управления глобальными атрибутами прямо на экране
+  all_known_attrs = list(db["global_attributes"].keys())
+
+  selected_attributes = []
+  cols_checkboxes = st.columns(min(len(all_known_attrs), 4))
+  for idx, attr in enumerate(all_known_attrs):
+    col_idx = idx % len(cols_checkboxes)
+    with cols_checkboxes[col_idx]:
+      # По умолчанию выбираем обязательные или основные
+      is_default = db["global_attributes"][attr].get("required", False) or attr in [
+          "Наименование товара",
+          "Артикул / SKU",
+      ]
+      if st.checkbox(attr, value=is_default, key=f"chk_{attr}"):
+        selected_attributes.append(attr)
+
+  # Возможность добавить совершенно новый заголовок на лету
+  with st.expander("➕ Добавить новый глобальный заголовок в систему"):
+    new_attr_input = st.text_input("Название новой характеристики (например, 'Диаметр, мм')")
+    is_new_req = st.checkbox("Сделать это поле обязательным для сайта")
+    if st.button("Создать характеристику"):
+      if new_attr_input and new_attr_input not in db["global_attributes"]:
+        db["global_attributes"][new_attr_input] = {"required": is_new_req}
+        save_db(db)
+        st.success(f"Характеристика '{new_attr_input}' добавлена! Перезагрузите выбор.")
+        st.rerun()
+
+  st.divider()
+  st.subheader("🔗 Шаг 2: Сопоставление колонок и просмотр значений")
+
+  # Выбор сохраненного шаблона
   template_names = list(db["templates"].keys())
   selected_template = st.selectbox(
-      "📦 Применить сохраненный шаблон маппинга (если есть)",
-      ["-- Выберите шаблон или настройте вручную --"] + template_names,
+      "📦 Загрузить сохраненный шаблон маппинга для этого поставщика",
+      ["-- Выберите шаблон (опционально) --"] + template_names,
   )
 
   saved_mapping = {}
-  if selected_template != "-- Выберите шаблон или настройте вручную --":
+  if selected_template != "-- Выберите шаблон (опционально) --":
     saved_mapping = db["templates"][selected_template]
 
-  # Динамическое построение строк маппинга для каждого глобального атрибута
   mapping_results = {}
 
-  st.markdown(
-      "Сопоставьте глобальные параметры сайта с колонками в загруженном файле:"
+  # Выстраиваем интерактивную таблицу маппинга для выбранных атрибутов
+  for attr_name in selected_attributes:
+    is_req = db["global_attributes"].get(attr_name, {}).get("required", False)
+    label_text = f"**{attr_name}**" + (" *" if is_req else "")
+
+    with st.container():
+      c1, c2, c3 = st.columns([2, 3, 3])
+
+      with c1:
+        st.markdown(label_text, unsafe_allow_html=True)
+
+      with c2:
+        # Ищем дефолт из шаблона или подбираем по похожести
+        default_idx = 0
+        saved_col = saved_mapping.get(attr_name)
+        if saved_col in columns:
+          default_idx = columns.index(saved_col)
+        else:
+          # Пробуем найти частичное совпадение имени
+          for i, col in enumerate(columns):
+            if attr_name.lower() in col.lower():
+              default_idx = i
+              break
+
+        chosen_col = st.selectbox(
+            f"Колонка для {attr_name}",
+            columns,
+            index=default_idx,
+            key=f"map_{attr_name}",
+        )
+        mapping_results[attr_name] = chosen_col
+
+      with c3:
+        # ВЫПАДАЮЩИЙ СПИСОК / ПРОСМОТР ВСЕХ УНИКАЛЬНЫХ ЗНАЧЕНИЙ ХАРАКТЕРИСТИК
+        if chosen_col and chosen_col in df.columns:
+          unique_values = df[chosen_col].dropna().unique().tolist()
+          with st.expander(f"👁️ Посмотреть значения ({len(unique_values)} шт.)"):
+            # Выводим список уникальных значений для этой характеристики
+            st.write(unique_values[:100])  # показываем до 100 уникальных
+            if len(unique_values) > 100:
+              st.caption("Показаны первые 100 уникальных значений...")
+        else:
+          st.caption("Нет данных")
+
+      st.markdown("---")
+
+  # --- БЛОК СОХРАНЕНИЯ ШАБЛОНА ---
+  st.subheader("💾 Шаг 3: Сохранение настроек маппинга")
+  template_name_input = st.text_input(
+      "Имя шаблона для сохранения (например, 'Поставщик_А_Прайс')", value=""
   )
-
-  for attr_name, attr_info in db["global_attributes"].items():
-    col1, col2, col3 = st.columns([2, 2, 2])
-
-    with col1:
-      req_label = (
-          f"**{attr_name}** <span style='color:red'>*</span>"
-          if attr_info["required"]
-          else f"**{attr_name}**"
-      )
-      st.markdown(req_label, unsafe_allow_html=True)
-
-    with col2:
-      # Пытаемся подставить дефолт из сохраненного шаблона
-      default_idx = 0
-      saved_col = saved_mapping.get(attr_name)
-      if saved_col in columns:
-        default_idx = columns.index(saved_col)
-
-      chosen_col = st.selectbox(
-          f"Колонка для {attr_name}",
-          columns,
-          index=default_idx,
-          key=f"map_{attr_name}",
-      )
-      mapping_results[attr_name] = chosen_col
-
-    with col3:
-      if chosen_col and chosen_col in df.columns:
-        sample_val = str(df[chosen_col].dropna().head(1).values)
-        st.caption(f"Пример: {sample_val}")
-      else:
-        st.caption("Нет данных")
-
-  st.divider()
-
-  # --- БЛОК СОХРАНЕНИЯ В ПАМЯТЬ ---
-  st.subheader("💾 Сохранение настроек в память приложения")
-  save_template_name = st.text_input(
-      "Имя шаблона для этого поставщика (например: 'Прайс_Поставщика_А')",
-      value="",
+  save_template_btn = st.checkbox(
+      "Сохранить этот набор связок в постоянную память приложения", value=True
   )
-
-  col_s1, col_s2 = st.columns(2)
-  with col_s1:
-    save_checked = st.checkbox(
-        "Сохранить этот маппинг в постоянную память (шаблоны)", value=True
-    )
 
   if st.button(
-      "🚀 Запустить валидацию и сформировать файл",
-      type="primary",
+      "🚀 Проверить и сформировать итоговый файл для сайта", type="primary"
   ):
-    # Если пользователь хочет сохранить шаблон
-    if save_checked and save_template_name:
-      db["templates"][save_template_name] = mapping_results
+    # Сохранение шаблона в JSON
+    if save_template_btn and template_name_input:
+      db["templates"][template_name_input] = mapping_results
       save_db(db)
-      st.success(f"Шаблон '{save_template_name}' успешно сохранен в память!")
+      st.success(f"Шаблон '{template_name_input}' успешно сохранен в память!")
 
     # Валидация обязательных полей
     errors = []
-    for attr_name, attr_info in db["global_attributes"].items():
-      if attr_info["required"]:
+    for attr_name in selected_attributes:
+      is_req = db["global_attributes"].get(attr_name, {}).get("required", False)
+      if is_req:
         mapped_col = mapping_results.get(attr_name)
         if mapped_col and df[mapped_col].isnull().any():
           errors.append(
-              f"В обязательной колонке '{attr_name}' (колонка файла:"
-              f" '{mapped_col}') обнаружены пустые ячейки!"
+              f"В обязательном поле '{attr_name}' (колонка файла:"
+              f" '{mapped_col}') есть пустые ячейки!"
           )
 
     if errors:
-      st.warning(
-          "⚠️ Обнаружены незаполненные обязательные поля перед выгрузкой:"
-      )
+      st.warning("⚠️ Предупреждения по обязательным полям:")
       for err in errors:
         st.write(f"- {err}")
 
@@ -202,19 +213,19 @@ if uploaded_file is not None:
       if mapped_col in df.columns:
         result_df[attr_name] = df[mapped_col]
 
-    st.success("✅ Готово! Файл сформирован согласно вашим настройкам.")
+    st.success("✅ Готово! Файл успешно отформатирован под ваши параметры.")
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
       result_df.to_excel(writer, index=False, sheet_name="Import")
 
     st.download_button(
-        label="📥 Скачать готовый файл для сайта",
+        label="📥 Скачать готовый файл",
         data=buffer.getvalue(),
-        file_name="normalized_export.xlsx",
+        file_name="mapped_export.xlsx",
         mime=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
     )
 else:
-  st.info("👆 Загрузите файл выше, чтобы начать настройку маппинга.")
+  st.info("👆 Загрузите файл выгрузки или прайса выше, чтобы начать настройку.")
