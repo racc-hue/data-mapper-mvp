@@ -8,10 +8,10 @@ st.set_page_config(
     page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
 )
 
-DB_FILE = "mdm_knowledge_base.json"
+DB_FILE = "mdm_knowledge_base_v2.json"
 
 
-# Инициализация или загрузка постоянной базы знаний
+# Загрузка базы знаний (памяти)
 def load_db():
   if os.path.exists(DB_FILE):
     try:
@@ -20,9 +20,22 @@ def load_db():
     except:
       pass
   return {
-      "categories": {},  # { "Название подкатегории": { "required_attributes": [...] } }
-      "global_attributes": [],  # Общий список всех встреченных характеристик
-      "imported_files_count": 0,
+      "categories": {},  # { "Подкатегория": { "required_attributes": [...] } }
+      "global_glossary": {},  # { "Название характеристики": [список уникальных значений] }
+      "base_columns": [
+          "артикул",
+          "код",
+          "название",
+          "id",
+          "url",
+          "скрыта",
+          "бренд",
+          "описание",
+          "картинок",
+          "документ",
+          "сертификат",
+          "breadcrumbs",
+      ],
   }
 
 
@@ -33,26 +46,27 @@ def save_db(data):
 
 db = load_db()
 
-st.title("🧠 MDM-Система каталога, категорий и глоссария")
+st.title("🧠 MDM-Система: Глоссарий, Характеристики и Обязательные поля")
 
-# Навигация по разделам
-tab_import, tab_glossary = st.tabs(
-    ["📥 Загрузка и обучение по файлу", "📚 Управление глоссарием и категориями"]
-)
+tab_import, tab_glossary, tab_required = st.tabs([
+    "📥 Загрузка файла и сбор характеристик",
+    "📚 Управление глоссарием и заголовками",
+    "⭐ Настройка обязательных полей",
+])
 
 # ==========================================
-# ВКЛАДКА 1: ЗАГРУЗКА И ОБУЧЕНИЕ
+# ВКЛАДКА 1: ЗАГРУЗКА И СБОР ЗНАЧЕНИЙ
 # ==========================================
 with tab_import:
-  st.subheader("Обучение системы на файле выгрузки сайта")
+  st.subheader("Импорт файла выгрузки сайта")
   st.write(
-      "Загрузите выгрузку. Система автоматически определит базовые колонки,"
-      " вычленит категорию из `breadcrumbs` и пополнит общий глоссарий"
-      " характеристик."
+      "Загрузите файл. Приложение автоматически отделит базовые колонки от"
+      " характеристик, определит подкатегорию по `breadcrumbs` и «съест» все"
+      " непустые значения характеристик в глобальный глоссарий."
   )
 
   uploaded_file = st.file_uploader(
-      "Загрузите Excel или CSV выгрузку", type=["xlsx", "xls", "csv"], key="uploader_main"
+      "Загрузите Excel или CSV выгрузку", type=["xlsx", "xls", "csv"], key="up_1"
   )
 
   if uploaded_file is not None:
@@ -78,158 +92,144 @@ with tab_import:
       st.error(f"Ошибка чтения файла: {e}")
       st.stop()
 
-    st.success(f"Файл успешно прочитан! Строк: {len(df)}, Колонок: {len(df.columns)}")
-    columns = list(df.columns)
+    st.success(f"Файл успешно загружен. Строк: {len(df)}, Колонок: {len(df.columns)}")
 
-    # 1. Поиск базовых колонок и характеристик
-    # Базовыми считаем те, что часто встречаются (артикул, бренд, описание, url, breadcrumbs и т.д.)
-    base_keywords = [
-        "артикул",
-        "код",
-        "название",
-        "id",
-        "url",
-        "скрыта",
-        "бренд",
-        "описание",
-        "картинок",
-        "документ",
-        "сертификат",
-        "breadcrumbs",
-    ]
-
-    detected_base = []
-    detected_chars = []
-
-    for col in columns:
-      col_lower = str(col).lower()
-      is_base = any(kw in col_lower for kw in base_keywords)
-      if is_base:
-        detected_base.append(col)
-      else:
-        detected_chars.append(col)
-
-    st.write("---")
-    st.info(
-        f"🔍 **Автоматический анализ структуры:**\n"
-        f"- Базовые системные колонки ({len(detected_base)} шт.): `{detected_base}`\n"
-        f"- Колонки характеристик ({len(detected_chars)} шт.): `{detected_chars}`"
-    )
-
-    # 2. Анализ хлебных крошек (breadcrumbs)
-    category_col = None
-    for col in columns:
-      if "breadcrumb" in col.lower() or "крошк" in col.lower() or "раздел" in col.lower():
-        category_col = col
+    # Определяем категорию по хлебным крошкам
+    cat_col = None
+    for c in df.columns:
+      if "breadcrumb" in c.lower() or "крошк" in c.lower() or "раздел" in c.lower():
+        cat_col = c
         break
 
-    extracted_category = "Общий каталог"
-    if category_col and category_col in df.columns:
-      # Берем первое непустое значение для примера
-      sample_bc = df[category_col].dropna().astype(str).values
+    extracted_cat = "Общий каталог"
+    if cat_col and cat_col in df.columns:
+      sample_bc = df[cat_col].dropna().astype(str).values
       if len(sample_bc) > 0:
-        # Обычно разделитель " > "
         parts = sample_bc[0].split(">")
-        extracted_category = parts[-1].strip()
+        extracted_cat = parts[-1].strip()
 
-    st.write(f"📂 **Определенная подкатегория для этого файла:** `{extracted_category}`")
+    st.info(f"📂 Определенная подкатегория: **{extracted_cat}**")
 
-    # Кнопка обучения и сохранения в БД
-    if st.button("🚀 Обучить систему и добавить характеристики в глоссарий", type="primary"):
-      # Добавляем характеристики в глобальный глоссарий (без дублей)
-      for char in detected_chars:
-        if char not in db["global_attributes"]:
-          db["global_attributes"].append(char)
+    # Кнопка обработки и наполнения глоссария
+    if st.button("🚀 Обработать файл и закинуть характеристики в глоссарий", type="primary"):
+      base_keywords = db["base_columns"]
 
-      # Регистрируем категорию, если её еще нет
-      if extracted_category not in db["categories"]:
-        db["categories"][extracted_category] = {"required_attributes": []}
+      # Инициализируем категорию в базе, если её нет
+      if extracted_cat not in db["categories"]:
+        db["categories"][extracted_cat] = {"required_attributes": []}
 
-      db["imported_files_count"] += 1
+      added_count = 0
+      for col in df.columns:
+        col_lower = str(col).lower()
+        # Проверяем, является ли колонка характеристикой (не базовой)
+        is_base = any(kw in col_lower for kw in base_keywords)
+
+        if not is_base:
+          # «Съедаем» все непустые значения из этой колонки
+          non_empty_vals = df[col].dropna().astype(str).unique().tolist()
+          # Убираем пустые строки или пробелы
+          non_empty_vals = [v.strip() for v in non_empty_vals if v.strip()]
+
+          if non_empty_vals:
+            if col not in db["global_glossary"]:
+              db["global_glossary][col] = []
+
+            # Добавляем уникальные значения без дублей
+            for val in non_empty_vals:
+              if val not in db["global_glossary"][col]:
+                db["global_glossary"][col].append(val)
+            added_count += 1
+
       save_db(db)
       st.success(
-          f"✅ База знаний успешно обновлена! Добавлено новых характеристик в"
-          f" глоссарий: {len(detected_chars)}. Категория '{extracted_category}'"
-          f" зарегистрирована."
+          f"✅ Готово! Обработано характеристик: {added_count}. Все уникальные"
+          " значения успешно добавлены в глобальный глоссарий."
       )
 
 # ==========================================
-# ВКЛАДКА 2: УПРАВЛЕНИЕ ГЛОССАРИЕМ И КАТЕГОРИЯМИ
+# ВКЛАДКА 2: УПРАВЛЕНИЕ ГЛОССАРИЕМ И ЗАГОЛОВКАМИ
 # ==========================================
 with tab_glossary:
-  st.subheader("📚 Редактор глобального глоссария и требований подкатегорий")
+  st.subheader("📚 Редактор глобального глоссария характеристик")
   st.write(
-      "Здесь вы можете управлять накопленными характеристиками, удалять лишний"
-      " мусор и настраивать обязательные заголовки для конкретных подкатегорий."
+      "Здесь вы можете настраивать заголовки, удалять ненужные мусорные"
+      " характеристики и смотреть накопленные значения."
   )
 
-  col_g1, col_g2 = st.columns(2)
+  glossary = db["global_glossary"]
 
-  # Управление глобальным списком характеристик
-  with col_g1:
-    st.markdown("### 🌐 Общий глоссарий характеристик")
-    st.caption("Все характеристики, собранные из загруженных файлов.")
+  if not glossary:
+    st.info("Глоссарий пока пуст. Загрузите файл на первой вкладке.")
+  else:
+    to_delete = []
+    for attr_name, values_list in list(glossary.items()):
+      with st.expander(f"📌 {attr_name} (Уникальных значений: {len(values_list)})"):
+        # Переименование заголовка характеристики
+        new_name = st.text_input(
+            "Переименовать заголовок", value=attr_name, key=f"rename_{attr_name}"
+        )
+        if new_name != attr_name and new_name:
+          if st.button("💾 Сохранить новое имя", key=f"btn_rename_{attr_name}"):
+            glossary[new_name] = glossary.pop(attr_name)
+            save_db(db)
+            st.success("Заголовок переименован!")
+            st.rerun()
 
-    global_attrs = db["global_attributes"]
-    if not global_attrs:
-      st.info("Глоссарий пока пуст. Загрузите файл на первой вкладке.")
-    else:
-      # Интерфейс удаления ненужных заголовков
-      to_remove = []
-      for attr in global_attrs:
-        c_a, c_b = st.columns([4, 1])
-        with c_a:
-          st.text(attr)
-        with c_b:
-          if st.button("🗑️", key=f"del_{attr}"):
-            to_remove.append(attr)
+        st.write("Список «съеденных» значений:")
+        st.write(values_list[:50])  # показываем первые 50
 
-      if to_remove:
-        for item in to_remove:
-          db["global_attributes"].remove(item)
-        save_db(db)
-        st.success("Характеристика удалена из глоссария!")
-        st.rerun()
+        if st.button("🗑️ Удалить этот заголовок и все его значения", key=f"del_g_{attr_name}"):
+          to_delete.append(attr_name)
 
-      # Ручное добавление характеристики в глоссарий
       st.write("---")
-      new_manual_attr = st.text_input("Добавить характеристику вручную")
-      if st.button("Добавить в глоссарий"):
-        if new_manual_attr and new_manual_attr not in db["global_attributes"]:
-          db["global_attributes"].append(new_manual_attr)
-          save_db(db)
-          st.success("Добавлено!")
-          st.rerun()
 
-  # Управление категориями и их обязательными полями
-  with col_g2:
-    st.markdown("### 📂 Подкатегории и обязательные поля")
-    st.caption("Настройте, какие характеристики обязательны для каждой подкатегории.")
+    if to_delete:
+      for item in to_delete:
+        glossary.pop(item, None)
+      save_db(db)
+      st.success("Заголовок удален из глоссария!")
+      st.rerun()
 
-    categories = db["categories"]
-    if not categories:
-      st.info("Категорий пока нет. Они появятся после загрузки файлов с `breadcrumbs`.")
-    else:
-      selected_cat = st.selectbox("Выберите подкатегорию для настройки", list(categories.keys()))
+# ==========================================
+# ВКЛАДКА 3: НАСТРОЙКА ОБЯЗАТЕЛЬНЫХ ПОЛЕЙ
+# ==========================================
+with tab_required:
+  st.subheader("⭐ Независимая настройка обязательных полей по подкатегориям")
+  st.write(
+      "Выделите, какие именно заголовки характеристик являются обязательными"
+      " для конкретной подкатегории."
+  )
 
-      if selected_cat:
-        st.write(f"Настройка обязательных полей для: **{selected_cat}**")
-        current_required = categories[selected_cat].get("required_attributes", [])
+  categories = db["categories"]
 
-        # Чекбоксы для каждой характеристики из глобального глоссария
-        new_required_list = []
-        for attr in db["global_attributes"]:
-          is_checked = attr in current_required
-          if st.checkbox(attr, value=is_checked, key=f"req_{selected_cat}_{attr}"):
-            new_required_list.append(attr)
+  if not categories:
+    st.info("Категории еще не зарегистрированы. Загрузите файлы выгрузки.")
+  else:
+    selected_cat = st.selectbox(
+        "Выберите подкатегорию для настройки обязательных полей",
+        list(categories.keys()),
+        key="req_cat_select",
+    )
 
-        if st.button("💾 Сохранить обязательные поля для категории"):
-          db["categories"][selected_cat]["required_attributes"] = new_required_list
-          save_db(db)
-          st.success(f"Требования для категории '{selected_cat}' сохранены!")
+    if selected_cat:
+      current_reqs = categories[selected_cat].get("required_attributes", [])
+      all_attrs = list(db["global_glossary"].keys())
+
+      st.write(f"Настройка обязательных полей для категории: **{selected_cat}**")
+
+      new_reqs = []
+      for attr in all_attrs:
+        is_checked = attr in current_reqs
+        if st.checkbox(attr, value=is_checked, key=f"chk_req_{selected_cat}_{attr}"):
+          new_reqs.append(attr)
+
+      if st.button("💾 Сохранить обязательные поля для категории"):
+        db["categories"][selected_cat]["required_attributes"] = new_reqs
+        save_db(db)
+        st.success(f"Обязательные поля для категории '{selected_cat}' сохранены!")
 
   st.write("---")
-  if st.button("🗑️ Сбросить всю базу данных (очистить память)"):
+  if st.button("🗑️ Полный сброс всей базы данных"):
     if os.path.exists(DB_FILE):
       os.remove(DB_FILE)
     st.success("База данных очищена!")
