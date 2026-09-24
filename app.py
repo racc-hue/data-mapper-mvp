@@ -187,6 +187,7 @@ with tab_glossary:
   if not glossary:
     st.info("Глоссарий пуст. Загрузите файл на первой вкладке.")
   else:
+    # Формируем списки для селектора
     attr_options = []
     attr_map = {}
     for attr, info in glossary.items():
@@ -198,6 +199,14 @@ with tab_glossary:
         label = f"{attr} ({count} знач.)"
       attr_options.append(label)
       attr_map[label] = attr
+
+    # Управляем выбором через session_state, чтобы избежать сброса на первый элемент
+    if (
+        "glossary_sel" not in st.session_state
+        or st.session_state.glossary_sel not in attr_options
+    ):
+      if attr_options:
+        st.session_state.glossary_sel = attr_options[0]
 
     col_sel, col_del_btn = st.columns([5, 1])
 
@@ -212,10 +221,15 @@ with tab_glossary:
     with col_del_btn:
       st.write("")
       st.write("")
-      if st.button("🗑️ Удалить", key=f"quick_del_{selected_attr}"):
+      if st.button("🗑️ Удалить", key="quick_del_btn", type="secondary"):
+        # Удаляем характеристику из глоссария
         glossary.pop(selected_attr, None)
         save_db(db)
-        st.success(f"Заголовок '{selected_attr}' удален!")
+
+        # Сбрасываем выбранный элемент, чтобы селектор корректно перестроился без ошибок
+        if "glossary_sel" in st.session_state:
+          del st.session_state.glossary_sel
+
         st.rerun()
 
     st.markdown("---")
@@ -231,6 +245,14 @@ with tab_glossary:
         if st.button("💾 Сохранить новое имя"):
           glossary[new_attr_title] = glossary.pop(selected_attr)
           save_db(db)
+          st.session_state.glossary_sel = (
+              f"{new_attr_title} [только числовые]"
+              if glossary[new_attr_title].get("is_numeric", False)
+              else (
+                  f"{new_attr_title} ("
+                  f"{len(glossary[new_attr_title].get('values', []))} знач.)"
+              )
+          )
           st.success("Переименовано!")
           st.rerun()
 
@@ -243,8 +265,7 @@ with tab_glossary:
           key=f"num_chk_{selected_attr}",
           help=(
               "Если включено, значения не будут забиваться в список, а заголовок"
-              " получит статус '[только числовые]'. Отключите, если число нужно"
-              " обрабатывать как текст."
+              " получит статус '[только числовые]'."
           ),
       )
       if new_is_numeric != current_is_numeric:
@@ -252,9 +273,9 @@ with tab_glossary:
         if new_is_numeric:
           attr_info["values"] = []
         save_db(db)
-        st.success("Тип данных обновлен!")
         st.rerun()
 
+    # Быстрое удаление точечных значений через оптимизированный вид
     if not attr_info.get("is_numeric", False):
       values_list = attr_info.get("values", [])
       st.markdown(f"**Уникальных текстовых значений:** `{len(values_list)}`")
@@ -263,20 +284,21 @@ with tab_glossary:
         if not values_list:
           st.info("Список значений пуст.")
         else:
+          # Выводим компактно списком с индивидуальными кнопками удаления
           vals_to_remove = []
-          for val in values_list:
-            c_v1, c_v2 = st.columns([5, 1])
+          for idx_v, val in enumerate(values_list):
+            c_v1, c_v2 = st.columns([10, 1])
             with c_v1:
               st.text(val)
             with c_v2:
-              if st.button("❌", key=f"del_val_{selected_attr}_{val}"):
+              if st.button("❌", key=f"del_v_{selected_attr}_{idx_v}"):
                 vals_to_remove.append(val)
 
           if vals_to_remove:
             for v in vals_to_remove:
-              attr_info["values"].remove(v)
+              if v in attr_info["values"]:
+                attr_info["values"].remove(v)
             save_db(db)
-            st.success("Значения удалены!")
             st.rerun()
     else:
       st.info(
