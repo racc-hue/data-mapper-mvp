@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="MDM-Система каталога и глоссария", page_icon="🧠", layout="wide"
+    page_title="MDM: База и Структура", page_icon="🧠", layout="wide"
 )
 
 DB_FILE = "mdm_knowledge_base_v10.json"
@@ -17,17 +17,16 @@ def load_db():
     try:
       with open(DB_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        # Убедимся, что новые ключи присутствуют
         if "known_articles" not in data:
           data["known_articles"] = []
         return data
     except:
       pass
   return {
-      "categories": {},  # { "Полный путь": { "required_attributes": [] } }
-      "breadcrumbs_tree": [],  # Все уникальные цепочки хлебных крошек
-      "global_glossary": {},  # Глоссарий характеристик
-      "known_articles": [],  # Список уже обработанных артикулов (для защиты от дублей)
+      "categories": {},
+      "breadcrumbs_tree": [],
+      "global_glossary": {},
+      "known_articles": [],
       "base_columns": [
           "артикул",
           "код",
@@ -52,7 +51,7 @@ def save_db(data):
 
 db = load_db()
 
-st.title("🧠 MDM-Система управления каталогом и глоссарием")
+st.title("🧠 MDM-Система: Управление базой и структурой")
 
 tab_import, tab_structure, tab_glossary, tab_required = st.tabs([
     "📥 Загрузка файлов",
@@ -61,16 +60,12 @@ tab_import, tab_structure, tab_glossary, tab_required = st.tabs([
     "⭐ Обязательные поля",
 ])
 
-# ==========================================
-# ВКЛАДКА 1: ЗАГРУЗКА ФАЙЛОВ И УПРАВЛЕНИЕ БАЗОЙ
-# ==========================================
+# ВКЛАДКА 1: ЗАГРУЗКА И БД
 with tab_import:
   st.subheader("💾 Управление базой данных (.json)")
-
   db_col1, db_col2 = st.columns(2)
 
   with db_col1:
-    # Экспорт текущей БД в JSON
     db_json_bytes = json.dumps(db, ensure_ascii=False, indent=4).encode(
         "utf-8"
     )
@@ -83,7 +78,6 @@ with tab_import:
     )
 
   with db_col2:
-    # Импорт (загрузка) ранее сохраненной БД из JSON
     uploaded_db_file = st.file_uploader(
         "📤 Загрузить готовую базу данных (.json)",
         type=["json"],
@@ -98,12 +92,12 @@ with tab_import:
           if "known_articles" not in db:
             db["known_articles"] = []
           save_db(db)
-          st.success("✅ База данных успешно восстановлена из файла!")
+          st.success("✅ База данных успешно восстановлена!")
           st.rerun()
         else:
-          st.error("Неверный формат структуры JSON базы данных.")
+          st.error("Неверный формат JSON.")
       except Exception as e:
-        st.error(f"Ошибка при разборе JSON: {e}")
+        st.error(f"Ошибка: {e}")
 
   st.markdown("---")
   st.subheader("📥 Импорт файлов выгрузки сайта")
@@ -135,20 +129,14 @@ with tab_import:
       st.error(f"Ошибка чтения файла: {e}")
       st.stop()
 
-    st.info(f"Исходных строк в файле: {len(df)}")
-
-    # Ищем колонку артикула
     art_col = None
     for c in df.columns:
-      c_low = str(c).lower()
-      if c_low in ["артикул", "artikul", "article", "sku", "код"]:
+      if str(c).lower() in ["артикул", "artikul", "article", "sku", "код"]:
         art_col = c
         break
 
-    # Фильтрация строк по уже известным артикулам
     known_set = set(str(x) for x in db.get("known_articles", []))
     if art_col and art_col in df.columns and known_set:
-      # Оставляем только те строки, у которых артикул еще не зафиксирован в базе
       initial_len = len(df)
       df = df[
           ~df[art_col]
@@ -157,21 +145,15 @@ with tab_import:
           .isin(known_set)
           | df[art_col].isna()
       ]
-      skipped_count = initial_len - len(df)
-      if skipped_count > 0:
+      skipped = initial_len - len(df)
+      if skipped > 0:
         st.warning(
-            f"⚠️ Пропущено дублирующихся строк (артикулы уже есть в базе):"
-            f" `{skipped_count}`"
+            f"⚠️ Пропущено дублирующихся строк (артикулы уже в базе): `{skipped}`"
         )
 
-    st.success(f"Строк к обработке после фильтрации: {len(df)}")
+    st.success(f"Строк к обработке: {len(df)}")
 
-    if len(df) == 0:
-      st.warning(
-          "В файле не осталось новых строк для обработки (все артикулы уже"
-          " присутствуют в базе)."
-      )
-    else:
+    if len(df) > 0:
       cat_col = None
       for c in df.columns:
         if (
@@ -184,345 +166,165 @@ with tab_import:
 
       full_bc_chains = []
       if cat_col and cat_col in df.columns:
-        unique_cells = df[cat_col].dropna().astype(str).unique().tolist()
-        for cell in unique_cells:
-          sub_branches = cell.split(";")
-          for branch in sub_branches:
+        for cell in df[cat_col].dropna().astype(str).unique().tolist():
+          for branch in cell.split(";"):
             parts = [p.strip() for p in branch.split(">") if p.strip()]
-            if not parts:
-              continue
-            normalized_chain = " > ".join(parts)
-
-            if normalized_chain not in full_bc_chains:
-              full_bc_chains.append(normalized_chain)
-
-            current_path = []
-            for part in parts:
-              current_path.append(part)
-              path_str = " > ".join(current_path)
-              if path_str not in db["categories"]:
-                db["categories"][path_str] = {"required_attributes": []}
+            if parts:
+              chain = " > ".join(parts)
+              if chain not in full_bc_chains:
+                full_bc_chains.append(chain)
+              curr = []
+              for p in parts:
+                curr.append(p)
+                p_str = " > ".join(curr)
+                if p_str not in db["categories"]:
+                  db["categories"][p_str] = {"required_attributes": []}
 
       if st.button("🚀 Обработать файл и обновить базу данных", type="primary"):
-        # Добавляем цепочки крошек
         for chain in full_bc_chains:
           if chain not in db["breadcrumbs_tree"]:
             db["breadcrumbs_tree"].append(chain)
 
-        # Собираем артикулы в список обработанных
-        new_articles_added = 0
+        new_arts = 0
         if art_col and art_col in df.columns:
-          batch_arts = df[art_col].dropna().astype(str).str.strip().tolist()
-          for art in batch_arts:
+          for art in df[art_col].dropna().astype(str).str.strip().tolist():
             if art and art not in db["known_articles"]:
               db["known_articles"].append(art)
-              new_articles_added += 1
+              new_arts += 1
 
-        base_keywords = db["base_columns"]
         added_attrs = 0
-
         for col in df.columns:
-          col_lower = str(col).lower()
-          is_base = any(kw in col_lower for kw in base_keywords)
-          if not is_base:
-            col_series = df[col].dropna()
-            vals_raw = col_series.astype(str).tolist()
-            vals_raw = [v.strip() for v in vals_raw if v.strip()]
-            filled_count = len(vals_raw)
-
-            if filled_count > 0:
+          if not any(kw in str(col).lower() for kw in db["base_columns"]):
+            vals = [
+                v.strip()
+                for v in df[col].dropna().astype(str).tolist()
+                if v.strip()
+            ]
+            if vals:
               if col not in db["global_glossary"]:
                 db["global_glossary"][col] = {
                     "values": {},
                     "is_numeric": False,
                     "total_filled": 0,
                 }
-
-              db["global_glossary"][col]["total_filled"] = (
-                  db["global_glossary"][col].get("total_filled", 0)
-                  + filled_count
-              )
-              val_counts = Counter(vals_raw)
-
-              all_numeric = True
-              for v in val_counts.keys():
-                cleaned_v = (
-                    v.replace(",", ".").replace(" ", "").replace("%", "")
-                )
+              db["global_glossary"][col]["total_filled"] += len(vals)
+              vc = Counter(vals)
+              all_num = True
+              for v in vc.keys():
                 try:
-                  float(cleaned_v)
-                except ValueError:
-                  all_numeric = False
+                  float(v.replace(",", ".").replace(" ", "").replace("%", ""))
+                except:
+                  all_num = False
                   break
-
-              if all_numeric:
+              if all_num:
                 db["global_glossary"][col]["is_numeric"] = True
               else:
-                if isinstance(db["global_glossary"][col]["values"], list):
-                  old_list = db["global_glossary"][col]["values"]
-                  db["global_glossary"][col]["values"] = {
-                      v: 1 for v in old_list
-                  }
-
-                for v, cnt in val_counts.items():
-                  current_dict = db["global_glossary"][col]["values"]
-                  current_dict[v] = current_dict.get(v, 0) + cnt
-
+                for v, cnt in vc.items():
+                  db["global_glossary"][col]["values"][v] = (
+                      db["global_glossary"][col]["values"].get(v, 0) + cnt
+                  )
               added_attrs += 1
 
         save_db(db)
         st.success(
-            f"✅ Успешно! Добавлено новых артикулов: {new_articles_added}."
-            f" Обработано характеристик: {added_attrs}. База данных сохранена."
+            f"✅ Готово! Новых артикулов: {new_arts}, характеристик:"
+            f" {added_attrs}"
         )
 
-# ==========================================
-# ВКЛАДКА 2: СТРУКТУРА И КАТЕГОРИИ
-# ==========================================
+# ВКЛАДКА 2: СТРУКТУРА
 with tab_structure:
   st.subheader("📂 Иерархическое дерево структуры каталога")
-  categories = db["categories"]
-
-  if not categories:
-    st.info("Сначала загрузите файлы, чтобы сформировать структуру.")
+  if not db["categories"]:
+    st.info("Сначала загрузите файлы.")
   else:
 
     def build_tree(chains):
       tree = {}
-      for chain in chains:
-        parts = [p.strip() for p in chain.split(">") if p.strip()]
-        current = tree
-        for part in parts:
-          if part not in current:
-            current[part] = {}
-          current = current[part]
+      for ch in chains:
+        parts = [p.strip() for p in ch.split(">") if p.strip()]
+        cur = tree
+        for p in parts:
+          if p not in cur:
+            cur[p] = {}
+          cur = cur[p]
       return tree
 
-    def render_tree(subtree):
-      for name, sub in sorted(subtree.items()):
-        has_children = len(sub) > 0
-        if has_children:
+    def render_tree(sub):
+      for name, s in sorted(sub.items()):
+        if len(s) > 0:
           with st.expander(f"📁 {name}", expanded=False):
-            render_tree(sub)
+            render_tree(s)
         else:
           st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;📄 `{name}`")
 
-    tree_dict = build_tree(db["breadcrumbs_tree"])
-    render_tree(tree_dict)
+    render_tree(build_tree(db["breadcrumbs_tree"]))
 
-# ==========================================
-# ВКЛАДКА 3: ГЛОССАРИЙ И ЗНАЧЕНИЯ
-# ==========================================
+# ВКЛАДКА 3: ГЛОССАРИЙ
 with tab_glossary:
-  st.subheader("📚 Управление глоссарием и массовое удаление")
+  st.subheader("📚 Управление глоссарием")
   glossary = db["global_glossary"]
-
   if not glossary:
-    st.info("Глоссарий пуст. Загрузите файл на первой вкладке.")
+    st.info("Глоссарий пуст.")
   else:
-    col_left, col_right = st.columns([4, 6], gap="large")
-
-    with col_left:
-      st.markdown("### 📋 Заголовки характеристик")
-
-      if st.button(
-          "🗑️ Удалить выбранные заголовки",
-          type="primary",
-          key="del_selected_attrs",
-      ):
-        to_delete = [
-            attr
-            for attr in glossary.keys()
-            if st.session_state.get(f"chk_attr_{attr}", False)
+    cl, cr = st.columns([4, 6], gap="large")
+    with cl:
+      if st.button("🗑️ Удалить выбранные заголовки", type="primary"):
+        to_del = [
+            a
+            for a in glossary.keys()
+            if st.session_state.get(f"chk_attr_{a}", False)
         ]
-        if to_delete:
-          for attr in to_delete:
-            glossary.pop(attr, None)
-          save_db(db)
-          if st.session_state.get("active_attr") in to_delete:
-            st.session_state.active_attr = None
-          st.success(f"Успешно удалено заголовков: {len(to_delete)}")
-          st.rerun()
-        else:
-          st.warning("Не выбрано ни одного заголовка для удаления.")
-
+        for a in to_del:
+          glossary.pop(a, None)
+        save_db(db)
+        st.success(f"Удалено: {len(to_del)}")
+        st.rerun()
       st.markdown("---")
-
-      all_attrs = list(glossary.keys())
+      all_a = list(glossary.keys())
       if (
           "active_attr" not in st.session_state
           or st.session_state.active_attr not in glossary
       ):
-        st.session_state.active_attr = all_attrs[0] if all_attrs else None
-
-      for attr in all_attrs:
-        info = glossary[attr]
-        is_num = info.get("is_numeric", False)
-        total_filled = info.get("total_filled", 0)
-
-        if is_num:
-          badge = f"[только числовые: {total_filled} зап.]"
-        else:
-          vals_dict = info.get("values", {})
-          if isinstance(vals_dict, list):
-            vals_dict = {v: 1 for v in vals_dict}
-            info["values"] = vals_dict
-          unique_count = len(vals_dict)
-          badge = f"({unique_count} уник. / {total_filled} зап.)"
-
-        c_chk, c_btn = st.columns([1, 10])
-        with c_chk:
-          st.checkbox("", key=f"chk_attr_{attr}", label_visibility="collapsed")
-        with c_btn:
-          btn_type = (
-              "primary"
-              if st.session_state.active_attr == attr
-              else "secondary"
-          )
+        st.session_state.active_attr = all_a[0] if all_a else None
+      for a in all_a:
+        tot = glossary[a].get("total_filled", 0)
+        badge = f"({tot} зап.)"
+        cc, cb = st.columns([1, 10])
+        with cc:
+          st.checkbox("", key=f"chk_attr_{a}", label_visibility="collapsed")
+        with cb:
           if st.button(
-              f"{attr} {badge}",
-              key=f"btn_attr_{attr}",
+              f"{a} {badge}",
+              key=f"btn_attr_{a}",
               use_container_width=True,
-              type=btn_type,
+              type=(
+                  "primary" if st.session_state.active_attr == a else "secondary"
+              ),
           ):
-            st.session_state.active_attr = attr
+            st.session_state.active_attr = a
             st.rerun()
+    with cr:
+      act = st.session_state.get("active_attr")
+      if act and act in glossary:
+        st.markdown(f"### ⚙️ {act}")
+        if not glossary[act].get("is_numeric", False):
+          vals = glossary[act].get("values", {})
+          for v, fq in sorted(vals.items(), key=lambda x: x[1], reverse=True):
+            st.text(f"{v} — ({fq} раз)")
 
-    with col_right:
-      active_attr = st.session_state.get("active_attr")
-      if not active_attr or active_attr not in glossary:
-        st.info("Выберите заголовок слева, чтобы посмотреть его характеристики.")
-      else:
-        st.markdown(f"### ⚙️ Редактирование: `{active_attr}`")
-        attr_info = glossary[active_attr]
-
-        rc1, rc2 = st.columns(2)
-        with rc1:
-          new_name = st.text_input(
-              "Переименовать заголовок",
-              value=active_attr,
-              key=f"rename_{active_attr}",
-          )
-          if new_name != active_attr and new_name:
-            if st.button("💾 Сохранить имя"):
-              glossary[new_name] = glossary.pop(active_attr)
-              save_db(db)
-              st.session_state.active_attr = new_name
-              st.success("Переименовано!")
-              st.rerun()
-
-        with rc2:
-          st.write("**Тип данных:**")
-          is_num_current = attr_info.get("is_numeric", False)
-          is_num_new = st.checkbox(
-              "🔢 Считать числовой",
-              value=is_num_current,
-              key=f"num_flag_{active_attr}",
-          )
-          if is_num_new != is_num_current:
-            attr_info["is_numeric"] = is_num_new
-            if is_num_new:
-              attr_info["values"] = {}
-            save_db(db)
-            st.rerun()
-
-        st.markdown(
-            f"**Всего заполненных ячеек в выгрузках:**"
-            f" `{attr_info.get('total_filled', 0)}`"
-        )
-        st.markdown("---")
-
-        if not attr_info.get("is_numeric", False):
-          vals_dict = attr_info.get("values", {})
-          if isinstance(vals_dict, list):
-            vals_dict = {v: 1 for v in vals_dict}
-            attr_info["values"] = vals_dict
-
-          st.markdown(
-              f"**Уникальных текстовых значений:** `{len(vals_dict)}`"
-          )
-
-          if vals_dict:
-            if st.button(
-                "🗑️ Удалить выбранные значения",
-                key=f"del_vals_{active_attr}",
-            ):
-              vals_to_del = [
-                  v
-                  for v in vals_dict.keys()
-                  if st.session_state.get(
-                      f"chk_val_{active_attr}_{hash(v)}", False
-                  )
-              ]
-              if vals_to_del:
-                for v in vals_to_del:
-                  vals_dict.pop(v, None)
-                save_db(db)
-                st.success(f"Успешно удалено значений: {len(vals_to_del)}")
-                st.rerun()
-              else:
-                st.warning("Не выбрано ни одного значения.")
-
-            st.markdown("---")
-
-            sorted_vals = sorted(
-                vals_dict.items(), key=lambda x: x[1], reverse=True
-            )
-            for v, freq in sorted_vals:
-              vc1, vc2 = st.columns([1, 15])
-              with vc1:
-                st.checkbox(
-                    "",
-                    key=f"chk_val_{active_attr}_{hash(v)}",
-                    label_visibility="collapsed",
-                )
-              with vc2:
-                st.text(f"{v}  —  ({freq} раз)")
-          else:
-            st.info("Список значений пуст.")
-        else:
-          st.info(
-              "ℹ️ Эта характеристика помечена как числовая. Текстовые значения"
-              " не хранятся."
-          )
-
-# ==========================================
 # ВКЛАДКА 4: ОБЯЗАТЕЛЬНЫЕ ПОЛЯ
-# ==========================================
 with tab_required:
-  st.subheader("⭐ Настройка обязательных полей по подкатегориям")
-  categories = db["categories"]
-
-  if not categories:
-    st.info("Сначала загрузите файлы, чтобы появились подкатегории.")
-  else:
-    selected_cat = st.selectbox(
-        "Выберите подкатегорию", sorted(categories.keys()), key="req_box"
-    )
-
-    if selected_cat:
-      current_reqs = categories[selected_cat].get("required_attributes", [])
-      all_attrs = list(db["global_glossary"].keys())
-
-      st.write(
-          "Отметьте галочками заголовки, которые должны быть обязательными"
-          f" для узла **{selected_cat}**:"
-      )
-
-      new_reqs = []
-      for attr in all_attrs:
-        is_checked = attr in current_reqs
-        if st.checkbox(attr, value=is_checked, key=f"req_c_{selected_cat}_{attr}"):
-          new_reqs.append(attr)
-
-      if st.button("💾 Сохранить обязательные поля"):
-        db["categories"][selected_cat]["required_attributes"] = new_reqs
+  st.subheader("⭐ Обязательные поля")
+  cats = db["categories"]
+  if cats:
+    sel = st.selectbox("Подкатегория", sorted(cats.keys()))
+    if sel:
+      reqs = cats[sel].get("required_attributes", [])
+      new_r = []
+      for attr in db["global_glossary"].keys():
+        if st.checkbox(attr, value=(attr in reqs), key=f"req_{sel}_{attr}"):
+          new_r.append(attr)
+      if st.button("💾 Сохранить обязательные"):
+        db["categories"][sel]["required_attributes"] = new_r
         save_db(db)
-        st.success("Изменения сохранены!")
-
-  st.write("---")
-  if st.button("🗑️ Полный сброс базы данных"):
-    if os.path.exists(DB_FILE):
-      os.remove(DB_FILE)
-    st.success("База очищена!")
-    st.rerun()
+        st.success("Сохранено!")
