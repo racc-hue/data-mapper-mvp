@@ -60,12 +60,10 @@ sorted_glossary_attrs = sorted(
     reverse=True,
 )
 
-# Варианты для селекторов: Базовые заголовки + Глоссарий по частотности
 all_target_options = (
     ["— Пропустить / Не выгружать —"] + base_columns + sorted_glossary_attrs
 )
 
-# Инициализация состояния для перехода к шагу 3
 if "step_3_ready" not in st.session_state:
   st.session_state.step_3_ready = False
 if "df_mapped_final" not in st.session_state:
@@ -107,14 +105,11 @@ if uploaded_feed is not None:
   st.success(f"Файл успешно загружен. Всего строк: {total_rows}")
 
   st.markdown("---")
-  st.subheader(
-      "2. Сопоставление заголовков (колонок) с учетом частотности и"
-      " заполненности"
-  )
+  st.subheader("2. Сопоставление заголовков (колонок)")
   st.info(
-      "💡 Для каждой колонки фида указано количество заполненных ячеек."
-      " Автоматически сопоставлены точные совпадения. Остальные можно выбрать"
-      " из выпадающего списка (частотные характеристики — вверху)."
+      "💡 Исходные названия колонок из фида выделены жирным. Выберите для"
+      " каждой из них целевое поле из вашей базы (частотные характеристики"
+      " расположены вверху списка)."
   )
 
   mapping_results = {}
@@ -126,14 +121,13 @@ if uploaded_feed is not None:
       if i + j < len(feed_columns):
         feed_col = feed_columns[i + j]
         with row_cols[j]:
-          # Считаем количество заполненных ячеек в колонке фида
           filled_count = df_feed[feed_col].dropna().astype(str).str.strip()
           filled_count = (filled_count != "").sum()
           fill_pct = (
               int((filled_count / total_rows) * 100) if total_rows > 0 else 0
           )
 
-          # Автоопределение совпадения (без учета регистра)
+          # Автоопределение точного совпадения
           default_index = 0
           feed_col_lower = str(feed_col).strip().lower()
           for idx, opt in enumerate(all_target_options):
@@ -141,15 +135,17 @@ if uploaded_feed is not None:
               default_index = idx
               break
 
-          label_text = (
-              f"Колонка: `{feed_col}` *(заполнено: {filled_count} из"
-              f" {total_rows} — {fill_pct}%)*"
+          # Делаем заголовок из фида ярким и заметным (без слова "Колонка:")
+          st.markdown(
+              f"📌 **`{feed_col}`** &nbsp;&nbsp;|&nbsp;&nbsp; *заполнено:"
+              f" {filled_count}/{total_rows} ({fill_pct}%)*"
           )
           selected_target = st.selectbox(
-              label_text,
+              f"Выбор целевого поля для {feed_col}",
               options=all_target_options,
               index=default_index,
               key=f"map_{feed_col}",
+              label_visibility="collapsed",
           )
           mapping_results[feed_col] = selected_target
 
@@ -169,7 +165,6 @@ if uploaded_feed is not None:
 
     df_mapped = pd.DataFrame(new_df_data)
 
-    # Гарантируем наличие всех базовых колонок в шаблоне
     for col in base_columns:
       if col not in df_mapped.columns:
         df_mapped[col] = ""
@@ -189,13 +184,12 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
       "3. Шаг 3: Сопоставление и нормализация конкретных характеристик (значений)"
   )
   st.info(
-      "Здесь вы можете проверить уникальные значения по ключевым"
-      " характеристикам и сопоставить их с эталонным глоссарием базы."
+      "Здесь вы можете выбрать характеристику, просмотреть уникальные значения"
+      " от поставщика и сопоставить их с эталоном из базы или ввести своё"
+      " собственное значение."
   )
 
   df_work = st.session_state.df_mapped_final.copy()
-
-  # Выберем колонки для нормализации (все, кроме базовых системных)
   non_base_cols = [c for c in df_work.columns if c not in base_columns]
 
   if non_base_cols:
@@ -204,7 +198,6 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
     )
 
     if selected_char_col:
-      # Получаем уникальные значения из фида для этой характеристики
       unique_vals = (
           df_work[selected_char_col]
           .dropna()
@@ -220,29 +213,42 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
           f" `{len(unique_vals)}`"
       )
 
-      # Достаем эталонные значения из глобального глоссария базы (если они там есть)
       ref_values_dict = (
           glossary.get(selected_char_col, {}).get("values", {})
           if selected_char_col in glossary
           else {}
       )
-      ref_options = (
-          ["— Оставить как есть —"]
-          + sorted(ref_values_dict.keys(), key=lambda x: ref_values_dict[x], reverse=True)
+      ref_options = ["— Оставить как есть —", "✏️ Ввести своё значение вручную"] + sorted(
+          ref_values_dict.keys(),
+          key=lambda x: ref_values_dict[x],
+          reverse=True,
       )
 
       value_mapping = {}
       with st.form(key=f"val_map_form_{selected_char_col}"):
-        st.write("Сопоставьте значения поставщика с эталонными из базы:")
-        # Ограничим вывод для удобства, если значений очень много
+        st.write("Сопоставьте значения поставщика:")
+
         for val in unique_vals[:50]:
-          mapped_val = st.selectbox(
-              f"Значение у поставщика: **{val}**",
-              options=ref_options,
-              key=f"val_map_{selected_char_col}_{hash(val)}",
-          )
-          if mapped_val != "— Оставить как есть —":
-            value_mapping[val] = mapped_val
+          cols_val = st.columns([2, 2])
+          with cols_val[0]:
+            st.markdown(f"**{val}**")
+          with cols_val[1]:
+            chosen_opt = st.selectbox(
+                f"Замена для {val}",
+                options=ref_options,
+                key=f"val_sel_{selected_char_col}_{hash(val)}",
+                label_visibility="collapsed",
+            )
+
+          if chosen_opt == "✏️ Ввести своё значение вручную":
+            custom_val = st.text_input(
+                f"Введите своё значение для '{val}'",
+                key=f"custom_val_{selected_char_col}_{hash(val)}",
+            )
+            if custom_val.strip():
+              value_mapping[val] = custom_val.strip()
+          elif chosen_opt != "— Оставить как есть —":
+            value_mapping[val] = chosen_opt
 
         submitted = st.form_submit_button(
             "💾 Применить замену значений к датасету"
