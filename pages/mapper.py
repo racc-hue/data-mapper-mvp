@@ -1,6 +1,8 @@
 import io
 import json
 import os
+import openpyxl
+from openpyxl.styles import Alignment, Font, PatternFill
 import pandas as pd
 import streamlit as st
 
@@ -127,7 +129,6 @@ if uploaded_feed is not None:
               int((filled_count / total_rows) * 100) if total_rows > 0 else 0
           )
 
-          # Автоопределение точного совпадения
           default_index = 0
           feed_col_lower = str(feed_col).strip().lower()
           for idx, opt in enumerate(all_target_options):
@@ -135,7 +136,6 @@ if uploaded_feed is not None:
               default_index = idx
               break
 
-          # Делаем заголовок из фида ярким и заметным (без слова "Колонка:")
           st.markdown(
               f"📌 **`{feed_col}`** &nbsp;&nbsp;|&nbsp;&nbsp; *заполнено:"
               f" {filled_count}/{total_rows} ({fill_pct}%)*"
@@ -249,7 +249,6 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
                 label_visibility="collapsed",
             )
 
-          # Логика приоритета: если введено своё поле, берем его, иначе выбранное из списка
           if custom_val.strip():
             value_mapping[val] = custom_val.strip()
           elif chosen_opt != "— Не менять —":
@@ -265,77 +264,63 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
           st.session_state.df_mapped_final = df_work
           st.success("✅ Значения успешно заменены в датасете!")
 
- import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
-
-st.markdown("---")
-st.subheader("4. Финальная выгрузка готового файла")
-st.info(
-    "💡 В итоговом файле базовые и обязательные заголовки будут автоматически"
-    " выделены цветом для удобства."
-)
-
-if st.button("📥 Сгенерировать и скачать файл с оформлением", type="primary"):
-  df_final = st.session_state.df_mapped_final
-
-  # Создаем Excel файл в памяти с помощью openpyxl
-  output_buffer = io.BytesIO()
-  with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
-    df_final.to_excel(writer, index=False, sheet_name="Processed_Feed")
-
-  output_buffer.seek(0)
-
-  # Открываем файл через openpyxl для стилизации
-  wb = openpyxl.load_workbook(output_buffer)
-  ws = wb.active
-
-  # Настройка стилей
-  # Зеленоватая заливка для базовых заголовков
-  base_header_fill = PatternFill(
-      start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
+  st.markdown("---")
+  st.subheader("4. Финальная выгрузка готового файла")
+  st.info(
+      "💡 В итоговом файле базовые и обязательные заголовки будут автоматически"
+      " выделены цветом для удобства."
   )
-  base_header_font = Font(name="Calibri", size=11, bold=True, color="006100")
 
-  # Сероватая заливка для остальных характеристик
-  other_header_fill = PatternFill(
-      start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
-  )
-  other_header_font = Font(name="Calibri", size=11, bold=True, color="333333")
+  if st.button("📥 Сгенерировать и скачать файл с оформлением", type="primary"):
+    df_final = st.session_state.df_mapped_final
 
-  # Проходим по первой строке (заголовкам)
-  for col_num in range(1, ws.max_column + 1):
-    cell = ws.cell(row=1, column=col_num)
-    col_name = str(cell.value)
+    output_buffer = io.BytesIO()
+    with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
+      df_final.to_excel(writer, index=False, sheet_name="Processed_Feed")
 
-    # Выравнивание заголовков по центру
-    cell.alignment = Alignment(
-        horizontal="center", vertical="center", wrap_text=True
+    output_buffer.seek(0)
+    wb = openpyxl.load_workbook(output_buffer)
+    ws = wb.active
+
+    base_header_fill = PatternFill(
+        start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
     )
+    base_header_font = Font(name="Calibri", size=11, bold=True, color="006100")
 
-    if col_name in base_columns:
-      cell.fill = base_header_fill
-      cell.font = base_header_font
-    else:
-      cell.fill = other_header_fill
-      cell.font = other_header_font
+    other_header_fill = PatternFill(
+        start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"
+    )
+    other_header_font = Font(name="Calibri", size=11, bold=True, color="333333")
 
-  # Устанавливаем автошину колонок для красоты
-  for col in ws.columns:
-    max_len = max(len(str(cell.value or "")) for cell in col)
-    col_letter = openpyxl.utils.get_column_letter(col[0].column)
-    ws.column_dimensions[col_letter].width = max(max_len + 3, 15)
+    for col_num in range(1, ws.max_column + 1):
+      cell = ws.cell(row=1, column=col_num)
+      col_name = str(cell.value)
+      cell.alignment = Alignment(
+          horizontal="center", vertical="center", wrap_text=True
+      )
 
-  # Сохраняем в финальный буфер
-  final_output = io.BytesIO()
-  wb.save(final_output)
-  final_output.seek(0)
+      if col_name in base_columns:
+        cell.fill = base_header_fill
+        cell.font = base_header_font
+      else:
+        cell.fill = other_header_fill
+        cell.font = other_header_font
 
-  st.download_button(
-      label="📥 Скачать красиво оформленный Excel-файл (.xlsx)",
-      data=final_output,
-      file_name="styled_processed_supplier_feed.xlsx",
-      mime=(
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-      ),
-      use_container_width=True,
-  )
+    for col in ws.columns:
+      max_len = max(len(str(cell.value or "")) for cell in col)
+      col_letter = openpyxl.utils.get_column_letter(col[0].column)
+      ws.column_dimensions[col_letter].width = max(max_len + 3, 15)
+
+    final_output = io.BytesIO()
+    wb.save(final_output)
+    final_output.seek(0)
+
+    st.download_button(
+        label="📥 Скачать красиво оформленный Excel-файл (.xlsx)",
+        data=final_output,
+        file_name="styled_processed_supplier_feed.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        use_container_width=True,
+    )
