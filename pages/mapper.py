@@ -184,9 +184,8 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
       "3. Шаг 3: Сопоставление и нормализация конкретных характеристик (значений)"
   )
   st.info(
-      "Здесь вы можете выбрать характеристику, просмотреть уникальные значения"
-      " от поставщика и сопоставить их с эталоном из базы или ввести своё"
-      " собственное значение."
+      "Здесь вы можете выбрать характеристику, сопоставить значения из фида с"
+      " эталоном из базы или вписать своё собственное значение вручную."
   )
 
   df_work = st.session_state.df_mapped_final.copy()
@@ -218,7 +217,7 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
           if selected_char_col in glossary
           else {}
       )
-      ref_options = ["— Оставить как есть —", "✏️ Ввести своё значение вручную"] + sorted(
+      ref_options = ["— Не менять —"] + sorted(
           ref_values_dict.keys(),
           key=lambda x: ref_values_dict[x],
           reverse=True,
@@ -226,28 +225,34 @@ if st.session_state.step_3_ready and st.session_state.df_mapped_final is not Non
 
       value_mapping = {}
       with st.form(key=f"val_map_form_{selected_char_col}"):
-        st.write("Сопоставьте значения поставщика:")
+        st.write(
+            "Для каждого значения выберите эталон из списка **или** впишите"
+            " своё:"
+        )
 
         for val in unique_vals[:50]:
-          cols_val = st.columns([2, 2])
+          cols_val = st.columns([2, 2, 2])
           with cols_val[0]:
-            st.markdown(f"**{val}**")
+            st.markdown(f"Исходное: **{val}**")
           with cols_val[1]:
             chosen_opt = st.selectbox(
-                f"Замена для {val}",
+                f"Эталон для {val}",
                 options=ref_options,
                 key=f"val_sel_{selected_char_col}_{hash(val)}",
                 label_visibility="collapsed",
             )
-
-          if chosen_opt == "✏️ Ввести своё значение вручную":
+          with cols_val[2]:
             custom_val = st.text_input(
-                f"Введите своё значение для '{val}'",
+                f"Своё значение для {val}",
+                placeholder="Или введите своё...",
                 key=f"custom_val_{selected_char_col}_{hash(val)}",
+                label_visibility="collapsed",
             )
-            if custom_val.strip():
-              value_mapping[val] = custom_val.strip()
-          elif chosen_opt != "— Оставить как есть —":
+
+          # Логика приоритета: если введено своё поле, берем его, иначе выбранное из списка
+          if custom_val.strip():
+            value_mapping[val] = custom_val.strip()
+          elif chosen_opt != "— Не менять —":
             value_mapping[val] = chosen_opt
 
         submitted = st.form_submit_button(
